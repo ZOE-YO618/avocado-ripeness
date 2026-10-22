@@ -1,0 +1,14 @@
+# Raw photographs are not committed (14,710 images); download them from Mendeley (see data/README.md)
+data/images/
+*.jpg
+*.jpeg
+!results/figures/*.png
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+.DS_Store
+Thumbs.db
