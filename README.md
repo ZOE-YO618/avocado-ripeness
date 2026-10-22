@@ -61,7 +61,7 @@ avocado-ripeness/
 Python 3.10 or newer is required (it was tested on 3.13).
 
 ```bash
-git clone https://github.com/<your-username>/avocado-ripeness.git
+git clone https://github.com/ZOE-YO618/avocado-ripeness.git
 cd avocado-ripeness
 python -m venv .venv
 # Windows:  .venv\Scripts\activate      macOS/Linux:  source .venv/bin/activate
