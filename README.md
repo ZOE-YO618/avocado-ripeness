@@ -85,6 +85,12 @@ python scripts/run_pipeline.py --image-dir "path/to/Avocado Ripening Dataset" --
 
 This takes about 1 minute on a laptop and writes `results/metrics.json`, `results/features_200.csv` and the figures in `results/figures/`. Add `--skip-resolution` to skip the resolution study and make it faster.
 
+To scan a single photo, like a shopper at the kiosk:
+
+```bash
+python scripts/scan_one.py "path/to/photo.jpg"
+```
+
 ### 4. Run the tests
 
 ```bash
