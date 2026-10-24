@@ -104,6 +104,10 @@ Then open `docs/index.html` in a browser.
 
 ---
 
+### Reproducibility check
+
+I re-ran all 24 tests and the full pipeline on my own laptop (Windows 11, Python 3.13.15) and got identical metrics. I also cloned this repository into a new folder and all 24 tests passed.
+
 ## Method summary
 
 1. **Segmentation.** The photo is converted RGB → HSV. Pixels that are both bright and unsaturated are treated as the white lightbox background. Everything else is fruit. A morphological opening is applied and the largest connected region is kept.
