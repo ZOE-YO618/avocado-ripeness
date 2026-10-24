@@ -34,10 +34,25 @@
                     <a class="variable" href="#STAGE_NAMES">STAGE_NAMES</a>
             </li>
             <li>
-                    <a class="function" href="#make_knn">make_knn</a>
+                    <a class="variable" href="#MODEL_LABELS">MODEL_LABELS</a>
             </li>
             <li>
-                    <a class="function" href="#select_k">select_k</a>
+                    <a class="variable" href="#PARAM_GRIDS">PARAM_GRIDS</a>
+            </li>
+            <li>
+                    <a class="function" href="#make_model">make_model</a>
+            </li>
+            <li>
+                    <a class="function" href="#is_regressor">is_regressor</a>
+            </li>
+            <li>
+                    <a class="function" href="#fit_model">fit_model</a>
+            </li>
+            <li>
+                    <a class="function" href="#to_stage">to_stage</a>
+            </li>
+            <li>
+                    <a class="function" href="#linear_coefficients">linear_coefficients</a>
             </li>
             <li>
                     <a class="function" href="#kiosk_message">kiosk_message</a>
@@ -58,100 +73,204 @@
                     <h1 class="modulename">
 <a href="./../avocado_ripeness.html">avocado_ripeness</a><wbr>.classifier    </h1>
 
-                        <div class="docstring"><p>k-Nearest Neighbours ripeness classifier and kiosk-style prediction helper.</p>
+                        <div class="docstring"><p>Ripeness prediction models and the kiosk-style message.</p>
 
-<p>kNN predicts the class of a new avocado by finding the <code>k</code> training
-avocados whose colour feature vectors are closest (Euclidean distance) and
-taking a majority vote. Features are standardised first (zero mean, unit
-variance) because otherwise features with large numeric ranges (hue in
-degrees, 0-360) would dominate features measured on a 0-1 scale.</p>
+<p>The ripening index (1 = underripe ... 5 = overripe) is an <em>ordered</em> scale, so
+the main approach treats it as a <strong>regression</strong> target: a model predicts a
+continuous index (e.g. 3.4), which is then rounded to the nearest stage.
+Compared with plain classification this means "off by one stage" is a smaller
+error than "off by three", which matches how wrong a recommendation would be.</p>
+
+<p>Models compared (all trained on the same standardised colour features):</p>
+
+<p>=================  =============================================  ==============
+name               model                                          tuned settings
+=================  =============================================  ==============
+<code>linear</code>         ordinary least-squares linear regression       none
+<code>tree</code>           decision tree regression                       depth, leaf size
+<code>svr</code>            support vector regression, RBF kernel          C, epsilon, gamma
+<code>mlp</code>            small neural network (multi-layer perceptron)  layers, L2 penalty
+<code>knn</code>            k-nearest-neighbours <em>classifier</em>              k
+=================  =============================================  ==============</p>
+
+<p>Linear regression is the final model; the others are evidence-based
+alternatives (see the report).</p>
 </div>
 
                         <input id="mod-classifier-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
                         <label class="view-source-button" for="mod-classifier-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">"""</span>
-</span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a><span class="sd">k-Nearest Neighbours ripeness classifier and kiosk-style prediction helper.</span>
-</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a>
-</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="sd">kNN predicts the class of a new avocado by finding the ``k`` training</span>
-</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="sd">avocados whose colour feature vectors are closest (Euclidean distance) and</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="sd">taking a majority vote. Features are standardised first (zero mean, unit</span>
-</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="sd">variance) because otherwise features with large numeric ranges (hue in</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="sd">degrees, 0-360) would dominate features measured on a 0-1 scale.</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="sd">"""</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.model_selection</span><span class="w"> </span><span class="kn">import</span> <span class="n">GroupKFold</span><span class="p">,</span> <span class="n">cross_val_score</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.neighbors</span><span class="w"> </span><span class="kn">import</span> <span class="n">KNeighborsClassifier</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.pipeline</span><span class="w"> </span><span class="kn">import</span> <span class="n">make_pipeline</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.preprocessing</span><span class="w"> </span><span class="kn">import</span> <span class="n">StandardScaler</span>
-</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>
-</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.ripening_model</span><span class="w"> </span><span class="kn">import</span> <span class="n">days_until_ready</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>
-</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="n">STAGE_NAMES</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>    <span class="mi">1</span><span class="p">:</span> <span class="s2">"Underripe"</span><span class="p">,</span>
-</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>    <span class="mi">2</span><span class="p">:</span> <span class="s2">"Breaking"</span><span class="p">,</span>
-</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a>    <span class="mi">3</span><span class="p">:</span> <span class="s2">"Ripe (first phase)"</span><span class="p">,</span>
-</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a>    <span class="mi">4</span><span class="p">:</span> <span class="s2">"Ripe (second phase)"</span><span class="p">,</span>
-</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a>    <span class="mi">5</span><span class="p">:</span> <span class="s2">"Overripe"</span><span class="p">,</span>
-</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a><span class="p">}</span>
-</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a>
-</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a>
-</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a><span class="k">def</span><span class="w"> </span><span class="nf">make_knn</span><span class="p">(</span><span class="n">k</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span> <span class="n">weights</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"distance"</span><span class="p">):</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a><span class="w">    </span><span class="sd">"""Return an (unfitted) StandardScaler + kNN pipeline.</span>
-</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a>
-</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a><span class="sd">    ``weights="distance"`` gives closer neighbours a larger vote.</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a><span class="sd">    """</span>
-</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a>    <span class="k">return</span> <span class="n">make_pipeline</span><span class="p">(</span><span class="n">StandardScaler</span><span class="p">(),</span>
-</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a>                         <span class="n">KNeighborsClassifier</span><span class="p">(</span><span class="n">n_neighbors</span><span class="o">=</span><span class="n">k</span><span class="p">,</span> <span class="n">weights</span><span class="o">=</span><span class="n">weights</span><span class="p">))</span>
-</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a>
-</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>
-</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a><span class="k">def</span><span class="w"> </span><span class="nf">select_k</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">groups</span><span class="p">,</span> <span class="n">k_values</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">11</span><span class="p">,</span> <span class="mi">15</span><span class="p">,</span> <span class="mi">21</span><span class="p">),</span> <span class="n">n_splits</span><span class="o">=</span><span class="mi">5</span><span class="p">):</span>
-</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a><span class="w">    </span><span class="sd">"""Choose k by grouped cross-validation on the training data only.</span>
-</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>
-</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a><span class="sd">    Groups are avocado IDs, so photos of the same fruit never appear in both</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a><span class="sd">    the fitting and validation parts of a fold.</span>
-</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>
-</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a><span class="sd">    Returns</span>
-</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a><span class="sd">    -------</span>
-</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a><span class="sd">    best_k : int</span>
-</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a><span class="sd">    scores : dict</span>
-</span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a><span class="sd">        Mean macro-F1 for every k tried.</span>
-</span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a><span class="sd">    """</span>
-</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a>    <span class="n">n_splits</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">n_splits</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">groups</span><span class="p">)))</span>
-</span><span id="L-52"><a href="#L-52"><span class="linenos">52</span></a>    <span class="n">cv</span> <span class="o">=</span> <span class="n">GroupKFold</span><span class="p">(</span><span class="n">n_splits</span><span class="o">=</span><span class="n">n_splits</span><span class="p">)</span>
-</span><span id="L-53"><a href="#L-53"><span class="linenos">53</span></a>    <span class="n">scores</span> <span class="o">=</span> <span class="p">{}</span>
-</span><span id="L-54"><a href="#L-54"><span class="linenos">54</span></a>    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">k_values</span><span class="p">:</span>
-</span><span id="L-55"><a href="#L-55"><span class="linenos">55</span></a>        <span class="n">s</span> <span class="o">=</span> <span class="n">cross_val_score</span><span class="p">(</span><span class="n">make_knn</span><span class="p">(</span><span class="n">k</span><span class="p">),</span> <span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">groups</span><span class="o">=</span><span class="n">groups</span><span class="p">,</span> <span class="n">cv</span><span class="o">=</span><span class="n">cv</span><span class="p">,</span> <span class="n">scoring</span><span class="o">=</span><span class="s2">"f1_macro"</span><span class="p">)</span>
-</span><span id="L-56"><a href="#L-56"><span class="linenos">56</span></a>        <span class="n">scores</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span>
-</span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a>    <span class="n">best_k</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">scores</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">scores</span><span class="o">.</span><span class="n">get</span><span class="p">)</span>
-</span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a>    <span class="k">return</span> <span class="n">best_k</span><span class="p">,</span> <span class="n">scores</span>
-</span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a>
-</span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a>
-</span><span id="L-61"><a href="#L-61"><span class="linenos">61</span></a><span class="k">def</span><span class="w"> </span><span class="nf">kiosk_message</span><span class="p">(</span><span class="n">stage</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">confidence</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">k_rate</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">t0</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="L-62"><a href="#L-62"><span class="linenos">62</span></a><span class="w">    </span><span class="sd">"""Turn a predicted stage into the message a shopper would see.</span>
-</span><span id="L-63"><a href="#L-63"><span class="linenos">63</span></a>
-</span><span id="L-64"><a href="#L-64"><span class="linenos">64</span></a><span class="sd">    Parameters</span>
-</span><span id="L-65"><a href="#L-65"><span class="linenos">65</span></a><span class="sd">    ----------</span>
-</span><span id="L-66"><a href="#L-66"><span class="linenos">66</span></a><span class="sd">    stage : int</span>
-</span><span id="L-67"><a href="#L-67"><span class="linenos">67</span></a><span class="sd">        Predicted ripening stage (1-5).</span>
-</span><span id="L-68"><a href="#L-68"><span class="linenos">68</span></a><span class="sd">    confidence : float</span>
-</span><span id="L-69"><a href="#L-69"><span class="linenos">69</span></a><span class="sd">        Classifier probability for that stage (0-1).</span>
-</span><span id="L-70"><a href="#L-70"><span class="linenos">70</span></a><span class="sd">    k_rate, t0 : float</span>
-</span><span id="L-71"><a href="#L-71"><span class="linenos">71</span></a><span class="sd">        Fitted logistic parameters for room-temperature storage, used to</span>
-</span><span id="L-72"><a href="#L-72"><span class="linenos">72</span></a><span class="sd">        estimate days until ready.</span>
-</span><span id="L-73"><a href="#L-73"><span class="linenos">73</span></a><span class="sd">    """</span>
-</span><span id="L-74"><a href="#L-74"><span class="linenos">74</span></a>    <span class="n">name</span> <span class="o">=</span> <span class="n">STAGE_NAMES</span><span class="p">[</span><span class="n">stage</span><span class="p">]</span>
-</span><span id="L-75"><a href="#L-75"><span class="linenos">75</span></a>    <span class="n">conf</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"(confidence </span><span class="si">{</span><span class="n">confidence</span><span class="si">:</span><span class="s2">.0%</span><span class="si">}</span><span class="s2">)"</span>
-</span><span id="L-76"><a href="#L-76"><span class="linenos">76</span></a>    <span class="k">if</span> <span class="n">stage</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">):</span>
-</span><span id="L-77"><a href="#L-77"><span class="linenos">77</span></a>        <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: ready to eat now </span><span class="si">{</span><span class="n">conf</span><span class="si">}</span><span class="s2">"</span>
-</span><span id="L-78"><a href="#L-78"><span class="linenos">78</span></a>    <span class="k">if</span> <span class="n">stage</span> <span class="o">==</span> <span class="mi">5</span><span class="p">:</span>
-</span><span id="L-79"><a href="#L-79"><span class="linenos">79</span></a>        <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: past best quality, not recommended </span><span class="si">{</span><span class="n">conf</span><span class="si">}</span><span class="s2">"</span>
-</span><span id="L-80"><a href="#L-80"><span class="linenos">80</span></a>    <span class="n">days</span> <span class="o">=</span> <span class="n">days_until_ready</span><span class="p">(</span><span class="n">stage</span><span class="p">,</span> <span class="n">k_rate</span><span class="p">,</span> <span class="n">t0</span><span class="p">)</span>
-</span><span id="L-81"><a href="#L-81"><span class="linenos">81</span></a>    <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: about </span><span class="si">{</span><span class="n">days</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2"> more day(s) at room temperature </span><span class="si">{</span><span class="n">conf</span><span class="si">}</span><span class="s2">"</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="sd">"""</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a><span class="sd">Ripeness prediction models and the kiosk-style message.</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a><span class="sd">The ripening index (1 = underripe ... 5 = overripe) is an *ordered* scale, so</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="sd">the main approach treats it as a **regression** target: a model predicts a</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a><span class="sd">continuous index (e.g. 3.4), which is then rounded to the nearest stage.</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="sd">Compared with plain classification this means "off by one stage" is a smaller</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="sd">error than "off by three", which matches how wrong a recommendation would be.</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a>
+</span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a><span class="sd">Models compared (all trained on the same standardised colour features):</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a>
+</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a><span class="sd">=================  =============================================  ==============</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a><span class="sd">name               model                                          tuned settings</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="sd">=================  =============================================  ==============</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a><span class="sd">``linear``         ordinary least-squares linear regression       none</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="sd">``tree``           decision tree regression                       depth, leaf size</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a><span class="sd">``svr``            support vector regression, RBF kernel          C, epsilon, gamma</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a><span class="sd">``mlp``            small neural network (multi-layer perceptron)  layers, L2 penalty</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a><span class="sd">``knn``            k-nearest-neighbours *classifier*              k</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a><span class="sd">=================  =============================================  ==============</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a>
+</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a><span class="sd">Linear regression is the final model; the others are evidence-based</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a><span class="sd">alternatives (see the report).</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a><span class="sd">"""</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a>
+</span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a>
+</span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.linear_model</span><span class="w"> </span><span class="kn">import</span> <span class="n">LinearRegression</span>
+</span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.model_selection</span><span class="w"> </span><span class="kn">import</span> <span class="n">GridSearchCV</span><span class="p">,</span> <span class="n">GroupKFold</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos"> 31</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.neighbors</span><span class="w"> </span><span class="kn">import</span> <span class="n">KNeighborsClassifier</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos"> 32</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.neural_network</span><span class="w"> </span><span class="kn">import</span> <span class="n">MLPRegressor</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos"> 33</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.pipeline</span><span class="w"> </span><span class="kn">import</span> <span class="n">make_pipeline</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos"> 34</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.preprocessing</span><span class="w"> </span><span class="kn">import</span> <span class="n">StandardScaler</span>
+</span><span id="L-35"><a href="#L-35"><span class="linenos"> 35</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.svm</span><span class="w"> </span><span class="kn">import</span> <span class="n">SVR</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.tree</span><span class="w"> </span><span class="kn">import</span> <span class="n">DecisionTreeRegressor</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a>
+</span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.ripening_model</span><span class="w"> </span><span class="kn">import</span> <span class="n">days_until_ready</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a>
+</span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a><span class="n">STAGE_NAMES</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a>    <span class="mi">1</span><span class="p">:</span> <span class="s2">"Underripe"</span><span class="p">,</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a>    <span class="mi">2</span><span class="p">:</span> <span class="s2">"Breaking"</span><span class="p">,</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a>    <span class="mi">3</span><span class="p">:</span> <span class="s2">"Ripe (first phase)"</span><span class="p">,</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a>    <span class="mi">4</span><span class="p">:</span> <span class="s2">"Ripe (second phase)"</span><span class="p">,</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos"> 45</span></a>    <span class="mi">5</span><span class="p">:</span> <span class="s2">"Overripe"</span><span class="p">,</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos"> 46</span></a><span class="p">}</span>
+</span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a>
+</span><span id="L-48"><a href="#L-48"><span class="linenos"> 48</span></a><span class="c1">#: Display names used in tables and figures.</span>
+</span><span id="L-49"><a href="#L-49"><span class="linenos"> 49</span></a><span class="n">MODEL_LABELS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="L-50"><a href="#L-50"><span class="linenos"> 50</span></a>    <span class="s2">"linear"</span><span class="p">:</span> <span class="s2">"Linear regression"</span><span class="p">,</span>
+</span><span id="L-51"><a href="#L-51"><span class="linenos"> 51</span></a>    <span class="s2">"tree"</span><span class="p">:</span> <span class="s2">"Decision tree regression"</span><span class="p">,</span>
+</span><span id="L-52"><a href="#L-52"><span class="linenos"> 52</span></a>    <span class="s2">"svr"</span><span class="p">:</span> <span class="s2">"Support vector regression"</span><span class="p">,</span>
+</span><span id="L-53"><a href="#L-53"><span class="linenos"> 53</span></a>    <span class="s2">"mlp"</span><span class="p">:</span> <span class="s2">"Neural network regression"</span><span class="p">,</span>
+</span><span id="L-54"><a href="#L-54"><span class="linenos"> 54</span></a>    <span class="s2">"knn"</span><span class="p">:</span> <span class="s2">"kNN classifier"</span><span class="p">,</span>
+</span><span id="L-55"><a href="#L-55"><span class="linenos"> 55</span></a><span class="p">}</span>
+</span><span id="L-56"><a href="#L-56"><span class="linenos"> 56</span></a>
+</span><span id="L-57"><a href="#L-57"><span class="linenos"> 57</span></a><span class="c1">#: Hyper-parameter grids searched by inner grouped cross-validation.</span>
+</span><span id="L-58"><a href="#L-58"><span class="linenos"> 58</span></a><span class="c1">#: Linear regression has no hyper-parameters, which is one of its advantages.</span>
+</span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a><span class="n">PARAM_GRIDS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="L-60"><a href="#L-60"><span class="linenos"> 60</span></a>    <span class="s2">"linear"</span><span class="p">:</span> <span class="p">{},</span>
+</span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a>    <span class="s2">"tree"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"decisiontreeregressor__max_depth"</span><span class="p">:</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="kc">None</span><span class="p">],</span>
+</span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a>             <span class="s2">"decisiontreeregressor__min_samples_leaf"</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">20</span><span class="p">]},</span>
+</span><span id="L-63"><a href="#L-63"><span class="linenos"> 63</span></a>    <span class="s2">"svr"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"svr__C"</span><span class="p">:</span> <span class="p">[</span><span class="mf">0.3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">10</span><span class="p">],</span> <span class="s2">"svr__epsilon"</span><span class="p">:</span> <span class="p">[</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">],</span>
+</span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a>            <span class="s2">"svr__gamma"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"scale"</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">]},</span>
+</span><span id="L-65"><a href="#L-65"><span class="linenos"> 65</span></a>    <span class="s2">"mlp"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"mlpregressor__hidden_layer_sizes"</span><span class="p">:</span> <span class="p">[(</span><span class="mi">8</span><span class="p">,),</span> <span class="p">(</span><span class="mi">16</span><span class="p">,),</span> <span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">8</span><span class="p">)],</span>
+</span><span id="L-66"><a href="#L-66"><span class="linenos"> 66</span></a>            <span class="s2">"mlpregressor__alpha"</span><span class="p">:</span> <span class="p">[</span><span class="mf">1e-3</span><span class="p">,</span> <span class="mf">1e-2</span><span class="p">,</span> <span class="mf">1e-1</span><span class="p">]},</span>
+</span><span id="L-67"><a href="#L-67"><span class="linenos"> 67</span></a>    <span class="s2">"knn"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"kneighborsclassifier__n_neighbors"</span><span class="p">:</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">15</span><span class="p">,</span> <span class="mi">21</span><span class="p">]},</span>
+</span><span id="L-68"><a href="#L-68"><span class="linenos"> 68</span></a><span class="p">}</span>
+</span><span id="L-69"><a href="#L-69"><span class="linenos"> 69</span></a>
+</span><span id="L-70"><a href="#L-70"><span class="linenos"> 70</span></a>
+</span><span id="L-71"><a href="#L-71"><span class="linenos"> 71</span></a><span class="k">def</span><span class="w"> </span><span class="nf">make_model</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+</span><span id="L-72"><a href="#L-72"><span class="linenos"> 72</span></a><span class="w">    </span><span class="sd">"""Return an unfitted scikit-learn pipeline (standardise -&gt; model).</span>
+</span><span id="L-73"><a href="#L-73"><span class="linenos"> 73</span></a>
+</span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a><span class="sd">    Parameters</span>
+</span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a><span class="sd">    ----------</span>
+</span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a><span class="sd">    name : {"linear", "tree", "svr", "mlp", "knn"}</span>
+</span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a>
+</span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a><span class="sd">    Raises</span>
+</span><span id="L-79"><a href="#L-79"><span class="linenos"> 79</span></a><span class="sd">    ------</span>
+</span><span id="L-80"><a href="#L-80"><span class="linenos"> 80</span></a><span class="sd">    ValueError</span>
+</span><span id="L-81"><a href="#L-81"><span class="linenos"> 81</span></a><span class="sd">        For an unknown model name.</span>
+</span><span id="L-82"><a href="#L-82"><span class="linenos"> 82</span></a><span class="sd">    """</span>
+</span><span id="L-83"><a href="#L-83"><span class="linenos"> 83</span></a>    <span class="k">if</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">"linear"</span><span class="p">:</span>
+</span><span id="L-84"><a href="#L-84"><span class="linenos"> 84</span></a>        <span class="n">est</span> <span class="o">=</span> <span class="n">LinearRegression</span><span class="p">()</span>
+</span><span id="L-85"><a href="#L-85"><span class="linenos"> 85</span></a>    <span class="k">elif</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">"tree"</span><span class="p">:</span>
+</span><span id="L-86"><a href="#L-86"><span class="linenos"> 86</span></a>        <span class="n">est</span> <span class="o">=</span> <span class="n">DecisionTreeRegressor</span><span class="p">(</span><span class="n">random_state</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="L-87"><a href="#L-87"><span class="linenos"> 87</span></a>    <span class="k">elif</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">"svr"</span><span class="p">:</span>
+</span><span id="L-88"><a href="#L-88"><span class="linenos"> 88</span></a>        <span class="n">est</span> <span class="o">=</span> <span class="n">SVR</span><span class="p">(</span><span class="n">kernel</span><span class="o">=</span><span class="s2">"rbf"</span><span class="p">)</span>
+</span><span id="L-89"><a href="#L-89"><span class="linenos"> 89</span></a>    <span class="k">elif</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">"mlp"</span><span class="p">:</span>
+</span><span id="L-90"><a href="#L-90"><span class="linenos"> 90</span></a>        <span class="n">est</span> <span class="o">=</span> <span class="n">MLPRegressor</span><span class="p">(</span><span class="n">max_iter</span><span class="o">=</span><span class="mi">3000</span><span class="p">,</span> <span class="n">random_state</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="L-91"><a href="#L-91"><span class="linenos"> 91</span></a>    <span class="k">elif</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">"knn"</span><span class="p">:</span>
+</span><span id="L-92"><a href="#L-92"><span class="linenos"> 92</span></a>        <span class="n">est</span> <span class="o">=</span> <span class="n">KNeighborsClassifier</span><span class="p">(</span><span class="n">weights</span><span class="o">=</span><span class="s2">"distance"</span><span class="p">)</span>
+</span><span id="L-93"><a href="#L-93"><span class="linenos"> 93</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="L-94"><a href="#L-94"><span class="linenos"> 94</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unknown model '</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">'"</span><span class="p">)</span>
+</span><span id="L-95"><a href="#L-95"><span class="linenos"> 95</span></a>    <span class="c1"># Standardising (zero mean, unit variance) stops features measured in</span>
+</span><span id="L-96"><a href="#L-96"><span class="linenos"> 96</span></a>    <span class="c1"># degrees (hue) from dominating features measured as fractions 0-1.</span>
+</span><span id="L-97"><a href="#L-97"><span class="linenos"> 97</span></a>    <span class="k">return</span> <span class="n">make_pipeline</span><span class="p">(</span><span class="n">StandardScaler</span><span class="p">(),</span> <span class="n">est</span><span class="p">)</span>
+</span><span id="L-98"><a href="#L-98"><span class="linenos"> 98</span></a>
+</span><span id="L-99"><a href="#L-99"><span class="linenos"> 99</span></a>
+</span><span id="L-100"><a href="#L-100"><span class="linenos">100</span></a><span class="k">def</span><span class="w"> </span><span class="nf">is_regressor</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+</span><span id="L-101"><a href="#L-101"><span class="linenos">101</span></a><span class="w">    </span><span class="sd">"""True for models that predict a continuous ripening index."""</span>
+</span><span id="L-102"><a href="#L-102"><span class="linenos">102</span></a>    <span class="k">return</span> <span class="n">name</span> <span class="o">!=</span> <span class="s2">"knn"</span>
+</span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a>
+</span><span id="L-104"><a href="#L-104"><span class="linenos">104</span></a>
+</span><span id="L-105"><a href="#L-105"><span class="linenos">105</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fit_model</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">groups</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">n_splits</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">):</span>
+</span><span id="L-106"><a href="#L-106"><span class="linenos">106</span></a><span class="w">    </span><span class="sd">"""Fit a model, tuning its settings by grouped cross-validation if needed.</span>
+</span><span id="L-107"><a href="#L-107"><span class="linenos">107</span></a>
+</span><span id="L-108"><a href="#L-108"><span class="linenos">108</span></a><span class="sd">    Settings are chosen using the training data only (``groups`` = avocado IDs,</span>
+</span><span id="L-109"><a href="#L-109"><span class="linenos">109</span></a><span class="sd">    so photos of one fruit never end up on both sides of a split).</span>
+</span><span id="L-110"><a href="#L-110"><span class="linenos">110</span></a><span class="sd">    Regressors are tuned for lowest mean absolute error, the kNN classifier for</span>
+</span><span id="L-111"><a href="#L-111"><span class="linenos">111</span></a><span class="sd">    highest macro-F1.</span>
+</span><span id="L-112"><a href="#L-112"><span class="linenos">112</span></a>
+</span><span id="L-113"><a href="#L-113"><span class="linenos">113</span></a><span class="sd">    Returns</span>
+</span><span id="L-114"><a href="#L-114"><span class="linenos">114</span></a><span class="sd">    -------</span>
+</span><span id="L-115"><a href="#L-115"><span class="linenos">115</span></a><span class="sd">    model : fitted estimator</span>
+</span><span id="L-116"><a href="#L-116"><span class="linenos">116</span></a><span class="sd">    best_params : dict</span>
+</span><span id="L-117"><a href="#L-117"><span class="linenos">117</span></a><span class="sd">        Chosen settings (empty for linear regression).</span>
+</span><span id="L-118"><a href="#L-118"><span class="linenos">118</span></a><span class="sd">    """</span>
+</span><span id="L-119"><a href="#L-119"><span class="linenos">119</span></a>    <span class="n">grid</span> <span class="o">=</span> <span class="n">PARAM_GRIDS</span><span class="p">[</span><span class="n">name</span><span class="p">]</span>
+</span><span id="L-120"><a href="#L-120"><span class="linenos">120</span></a>    <span class="n">y_fit</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="nb">float</span><span class="p">)</span> <span class="k">if</span> <span class="n">is_regressor</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>
+</span><span id="L-121"><a href="#L-121"><span class="linenos">121</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">grid</span> <span class="ow">or</span> <span class="n">groups</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-122"><a href="#L-122"><span class="linenos">122</span></a>        <span class="k">return</span> <span class="n">make_model</span><span class="p">(</span><span class="n">name</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">y_fit</span><span class="p">),</span> <span class="p">{}</span>
+</span><span id="L-123"><a href="#L-123"><span class="linenos">123</span></a>    <span class="n">n_splits</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">n_splits</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">groups</span><span class="p">)))</span>
+</span><span id="L-124"><a href="#L-124"><span class="linenos">124</span></a>    <span class="n">search</span> <span class="o">=</span> <span class="n">GridSearchCV</span><span class="p">(</span><span class="n">make_model</span><span class="p">(</span><span class="n">name</span><span class="p">),</span> <span class="n">grid</span><span class="p">,</span> <span class="n">cv</span><span class="o">=</span><span class="n">GroupKFold</span><span class="p">(</span><span class="n">n_splits</span><span class="o">=</span><span class="n">n_splits</span><span class="p">),</span>
+</span><span id="L-125"><a href="#L-125"><span class="linenos">125</span></a>                          <span class="n">scoring</span><span class="o">=</span><span class="s2">"neg_mean_absolute_error"</span> <span class="k">if</span> <span class="n">is_regressor</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="k">else</span> <span class="s2">"f1_macro"</span><span class="p">)</span>
+</span><span id="L-126"><a href="#L-126"><span class="linenos">126</span></a>    <span class="n">search</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">y_fit</span><span class="p">,</span> <span class="n">groups</span><span class="o">=</span><span class="n">groups</span><span class="p">)</span>
+</span><span id="L-127"><a href="#L-127"><span class="linenos">127</span></a>    <span class="k">return</span> <span class="n">search</span><span class="o">.</span><span class="n">best_estimator_</span><span class="p">,</span> <span class="n">search</span><span class="o">.</span><span class="n">best_params_</span>
+</span><span id="L-128"><a href="#L-128"><span class="linenos">128</span></a>
+</span><span id="L-129"><a href="#L-129"><span class="linenos">129</span></a>
+</span><span id="L-130"><a href="#L-130"><span class="linenos">130</span></a><span class="k">def</span><span class="w"> </span><span class="nf">to_stage</span><span class="p">(</span><span class="n">index_pred</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+</span><span id="L-131"><a href="#L-131"><span class="linenos">131</span></a><span class="w">    </span><span class="sd">"""Convert continuous ripening-index predictions to integer stages 1-5.</span>
+</span><span id="L-132"><a href="#L-132"><span class="linenos">132</span></a>
+</span><span id="L-133"><a href="#L-133"><span class="linenos">133</span></a><span class="sd">    Values are rounded to the nearest integer and clipped to the valid range,</span>
+</span><span id="L-134"><a href="#L-134"><span class="linenos">134</span></a><span class="sd">    so e.g. 0.7 -&gt; 1, 3.4 -&gt; 3, 3.6 -&gt; 4 and 5.8 -&gt; 5.</span>
+</span><span id="L-135"><a href="#L-135"><span class="linenos">135</span></a><span class="sd">    """</span>
+</span><span id="L-136"><a href="#L-136"><span class="linenos">136</span></a>    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">rint</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">index_pred</span><span class="p">,</span> <span class="nb">float</span><span class="p">)),</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+</span><span id="L-137"><a href="#L-137"><span class="linenos">137</span></a>
+</span><span id="L-138"><a href="#L-138"><span class="linenos">138</span></a>
+</span><span id="L-139"><a href="#L-139"><span class="linenos">139</span></a><span class="k">def</span><span class="w"> </span><span class="nf">linear_coefficients</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">feature_names</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+</span><span id="L-140"><a href="#L-140"><span class="linenos">140</span></a><span class="w">    </span><span class="sd">"""Standardised coefficients of a fitted linear-regression pipeline.</span>
+</span><span id="L-141"><a href="#L-141"><span class="linenos">141</span></a>
+</span><span id="L-142"><a href="#L-142"><span class="linenos">142</span></a><span class="sd">    Because inputs are standardised, each coefficient is the change in</span>
+</span><span id="L-143"><a href="#L-143"><span class="linenos">143</span></a><span class="sd">    predicted ripening index for a one-standard-deviation change in that</span>
+</span><span id="L-144"><a href="#L-144"><span class="linenos">144</span></a><span class="sd">    feature, so their sizes can be compared directly.</span>
+</span><span id="L-145"><a href="#L-145"><span class="linenos">145</span></a><span class="sd">    """</span>
+</span><span id="L-146"><a href="#L-146"><span class="linenos">146</span></a>    <span class="n">lr</span> <span class="o">=</span> <span class="n">model</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+</span><span id="L-147"><a href="#L-147"><span class="linenos">147</span></a>    <span class="k">return</span> <span class="p">{</span><span class="s2">"intercept"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">lr</span><span class="o">.</span><span class="n">intercept_</span><span class="p">),</span>
+</span><span id="L-148"><a href="#L-148"><span class="linenos">148</span></a>            <span class="o">**</span><span class="p">{</span><span class="n">n</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">for</span> <span class="n">n</span><span class="p">,</span> <span class="n">c</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">feature_names</span><span class="p">,</span> <span class="n">lr</span><span class="o">.</span><span class="n">coef_</span><span class="p">)}}</span>
+</span><span id="L-149"><a href="#L-149"><span class="linenos">149</span></a>
+</span><span id="L-150"><a href="#L-150"><span class="linenos">150</span></a>
+</span><span id="L-151"><a href="#L-151"><span class="linenos">151</span></a><span class="k">def</span><span class="w"> </span><span class="nf">kiosk_message</span><span class="p">(</span><span class="n">index_pred</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">k_rate</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">t0</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-152"><a href="#L-152"><span class="linenos">152</span></a><span class="w">    </span><span class="sd">"""Turn a predicted ripening index into the message a shopper would see.</span>
+</span><span id="L-153"><a href="#L-153"><span class="linenos">153</span></a>
+</span><span id="L-154"><a href="#L-154"><span class="linenos">154</span></a><span class="sd">    Parameters</span>
+</span><span id="L-155"><a href="#L-155"><span class="linenos">155</span></a><span class="sd">    ----------</span>
+</span><span id="L-156"><a href="#L-156"><span class="linenos">156</span></a><span class="sd">    index_pred : float</span>
+</span><span id="L-157"><a href="#L-157"><span class="linenos">157</span></a><span class="sd">        Continuous predicted ripening index (any real number; it is rounded</span>
+</span><span id="L-158"><a href="#L-158"><span class="linenos">158</span></a><span class="sd">        to a stage for the label).</span>
+</span><span id="L-159"><a href="#L-159"><span class="linenos">159</span></a><span class="sd">    k_rate, t0 : float</span>
+</span><span id="L-160"><a href="#L-160"><span class="linenos">160</span></a><span class="sd">        Fitted logistic parameters for room-temperature (20 degC) storage,</span>
+</span><span id="L-161"><a href="#L-161"><span class="linenos">161</span></a><span class="sd">        used to estimate the number of days until the fruit is ready.</span>
+</span><span id="L-162"><a href="#L-162"><span class="linenos">162</span></a><span class="sd">    """</span>
+</span><span id="L-163"><a href="#L-163"><span class="linenos">163</span></a>    <span class="n">stage</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">to_stage</span><span class="p">(</span><span class="n">index_pred</span><span class="p">))</span>
+</span><span id="L-164"><a href="#L-164"><span class="linenos">164</span></a>    <span class="n">name</span> <span class="o">=</span> <span class="n">STAGE_NAMES</span><span class="p">[</span><span class="n">stage</span><span class="p">]</span>
+</span><span id="L-165"><a href="#L-165"><span class="linenos">165</span></a>    <span class="k">if</span> <span class="n">stage</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">):</span>
+</span><span id="L-166"><a href="#L-166"><span class="linenos">166</span></a>        <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: ready to eat now (index </span><span class="si">{</span><span class="n">index_pred</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">)"</span>
+</span><span id="L-167"><a href="#L-167"><span class="linenos">167</span></a>    <span class="k">if</span> <span class="n">stage</span> <span class="o">==</span> <span class="mi">5</span><span class="p">:</span>
+</span><span id="L-168"><a href="#L-168"><span class="linenos">168</span></a>        <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: past best quality, not recommended (index </span><span class="si">{</span><span class="n">index_pred</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">)"</span>
+</span><span id="L-169"><a href="#L-169"><span class="linenos">169</span></a>    <span class="n">days</span> <span class="o">=</span> <span class="n">days_until_ready</span><span class="p">(</span><span class="n">index_pred</span><span class="p">,</span> <span class="n">k_rate</span><span class="p">,</span> <span class="n">t0</span><span class="p">)</span>
+</span><span id="L-170"><a href="#L-170"><span class="linenos">170</span></a>    <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: about </span><span class="si">{</span><span class="n">days</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2"> more day(s) at room temperature (index </span><span class="si">{</span><span class="n">index_pred</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">)"</span>
 </span></pre></div>
 
 
@@ -168,80 +287,225 @@ degrees, 0-360) would dominate features measured on a 0-1 scale.</p>
     
 
                 </section>
-                <section id="make_knn">
-                            <input id="make_knn-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+                <section id="MODEL_LABELS">
+                    <div class="attr variable">
+            <span class="name">MODEL_LABELS</span>        =
+<input id="MODEL_LABELS-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+            <label class="view-value-button pdoc-button" for="MODEL_LABELS-view-value"></label><span class="default_value">{&#39;linear&#39;: &#39;Linear regression&#39;, &#39;tree&#39;: &#39;Decision tree regression&#39;, &#39;svr&#39;: &#39;Support vector regression&#39;, &#39;mlp&#39;: &#39;Neural network regression&#39;, &#39;knn&#39;: &#39;kNN classifier&#39;}</span>
+
+        
+    </div>
+    <a class="headerlink" href="#MODEL_LABELS"></a>
+    
+    
+
+                </section>
+                <section id="PARAM_GRIDS">
+                    <div class="attr variable">
+            <span class="name">PARAM_GRIDS</span>        =
+<input id="PARAM_GRIDS-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+            <label class="view-value-button pdoc-button" for="PARAM_GRIDS-view-value"></label><span class="default_value">{&#39;linear&#39;: {}, &#39;tree&#39;: {&#39;decisiontreeregressor__max_depth&#39;: [2, 3, 4, 6, 8, None], &#39;decisiontreeregressor__min_samples_leaf&#39;: [1, 5, 10, 20]}, &#39;svr&#39;: {&#39;svr__C&#39;: [0.3, 1, 3, 10], &#39;svr__epsilon&#39;: [0.1, 0.3], &#39;svr__gamma&#39;: [&#39;scale&#39;, 0.1]}, &#39;mlp&#39;: {&#39;mlpregressor__hidden_layer_sizes&#39;: [(8,), (16,), (16, 8)], &#39;mlpregressor__alpha&#39;: [0.001, 0.01, 0.1]}, &#39;knn&#39;: {&#39;kneighborsclassifier__n_neighbors&#39;: [3, 5, 9, 15, 21]}}</span>
+
+        
+    </div>
+    <a class="headerlink" href="#PARAM_GRIDS"></a>
+    
+    
+
+                </section>
+                <section id="make_model">
+                            <input id="make_model-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">make_knn</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">k</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span>, </span><span class="param"><span class="n">weights</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'distance'</span></span><span class="return-annotation">):</span></span>
+        <span class="name">make_model</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">name</span><span class="p">:</span> <span class="nb">str</span></span><span class="return-annotation">):</span></span>
 
-                <label class="view-source-button" for="make_knn-view-source"><span>View Source</span></label>
+                <label class="view-source-button" for="make_model-view-source"><span>View Source</span></label>
 
     </div>
-    <a class="headerlink" href="#make_knn"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="make_knn-31"><a href="#make_knn-31"><span class="linenos">31</span></a><span class="k">def</span><span class="w"> </span><span class="nf">make_knn</span><span class="p">(</span><span class="n">k</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span> <span class="n">weights</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"distance"</span><span class="p">):</span>
-</span><span id="make_knn-32"><a href="#make_knn-32"><span class="linenos">32</span></a><span class="w">    </span><span class="sd">"""Return an (unfitted) StandardScaler + kNN pipeline.</span>
-</span><span id="make_knn-33"><a href="#make_knn-33"><span class="linenos">33</span></a>
-</span><span id="make_knn-34"><a href="#make_knn-34"><span class="linenos">34</span></a><span class="sd">    ``weights="distance"`` gives closer neighbours a larger vote.</span>
-</span><span id="make_knn-35"><a href="#make_knn-35"><span class="linenos">35</span></a><span class="sd">    """</span>
-</span><span id="make_knn-36"><a href="#make_knn-36"><span class="linenos">36</span></a>    <span class="k">return</span> <span class="n">make_pipeline</span><span class="p">(</span><span class="n">StandardScaler</span><span class="p">(),</span>
-</span><span id="make_knn-37"><a href="#make_knn-37"><span class="linenos">37</span></a>                         <span class="n">KNeighborsClassifier</span><span class="p">(</span><span class="n">n_neighbors</span><span class="o">=</span><span class="n">k</span><span class="p">,</span> <span class="n">weights</span><span class="o">=</span><span class="n">weights</span><span class="p">))</span>
+    <a class="headerlink" href="#make_model"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="make_model-72"><a href="#make_model-72"><span class="linenos">72</span></a><span class="k">def</span><span class="w"> </span><span class="nf">make_model</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+</span><span id="make_model-73"><a href="#make_model-73"><span class="linenos">73</span></a><span class="w">    </span><span class="sd">"""Return an unfitted scikit-learn pipeline (standardise -&gt; model).</span>
+</span><span id="make_model-74"><a href="#make_model-74"><span class="linenos">74</span></a>
+</span><span id="make_model-75"><a href="#make_model-75"><span class="linenos">75</span></a><span class="sd">    Parameters</span>
+</span><span id="make_model-76"><a href="#make_model-76"><span class="linenos">76</span></a><span class="sd">    ----------</span>
+</span><span id="make_model-77"><a href="#make_model-77"><span class="linenos">77</span></a><span class="sd">    name : {"linear", "tree", "svr", "mlp", "knn"}</span>
+</span><span id="make_model-78"><a href="#make_model-78"><span class="linenos">78</span></a>
+</span><span id="make_model-79"><a href="#make_model-79"><span class="linenos">79</span></a><span class="sd">    Raises</span>
+</span><span id="make_model-80"><a href="#make_model-80"><span class="linenos">80</span></a><span class="sd">    ------</span>
+</span><span id="make_model-81"><a href="#make_model-81"><span class="linenos">81</span></a><span class="sd">    ValueError</span>
+</span><span id="make_model-82"><a href="#make_model-82"><span class="linenos">82</span></a><span class="sd">        For an unknown model name.</span>
+</span><span id="make_model-83"><a href="#make_model-83"><span class="linenos">83</span></a><span class="sd">    """</span>
+</span><span id="make_model-84"><a href="#make_model-84"><span class="linenos">84</span></a>    <span class="k">if</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">"linear"</span><span class="p">:</span>
+</span><span id="make_model-85"><a href="#make_model-85"><span class="linenos">85</span></a>        <span class="n">est</span> <span class="o">=</span> <span class="n">LinearRegression</span><span class="p">()</span>
+</span><span id="make_model-86"><a href="#make_model-86"><span class="linenos">86</span></a>    <span class="k">elif</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">"tree"</span><span class="p">:</span>
+</span><span id="make_model-87"><a href="#make_model-87"><span class="linenos">87</span></a>        <span class="n">est</span> <span class="o">=</span> <span class="n">DecisionTreeRegressor</span><span class="p">(</span><span class="n">random_state</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="make_model-88"><a href="#make_model-88"><span class="linenos">88</span></a>    <span class="k">elif</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">"svr"</span><span class="p">:</span>
+</span><span id="make_model-89"><a href="#make_model-89"><span class="linenos">89</span></a>        <span class="n">est</span> <span class="o">=</span> <span class="n">SVR</span><span class="p">(</span><span class="n">kernel</span><span class="o">=</span><span class="s2">"rbf"</span><span class="p">)</span>
+</span><span id="make_model-90"><a href="#make_model-90"><span class="linenos">90</span></a>    <span class="k">elif</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">"mlp"</span><span class="p">:</span>
+</span><span id="make_model-91"><a href="#make_model-91"><span class="linenos">91</span></a>        <span class="n">est</span> <span class="o">=</span> <span class="n">MLPRegressor</span><span class="p">(</span><span class="n">max_iter</span><span class="o">=</span><span class="mi">3000</span><span class="p">,</span> <span class="n">random_state</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="make_model-92"><a href="#make_model-92"><span class="linenos">92</span></a>    <span class="k">elif</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">"knn"</span><span class="p">:</span>
+</span><span id="make_model-93"><a href="#make_model-93"><span class="linenos">93</span></a>        <span class="n">est</span> <span class="o">=</span> <span class="n">KNeighborsClassifier</span><span class="p">(</span><span class="n">weights</span><span class="o">=</span><span class="s2">"distance"</span><span class="p">)</span>
+</span><span id="make_model-94"><a href="#make_model-94"><span class="linenos">94</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="make_model-95"><a href="#make_model-95"><span class="linenos">95</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unknown model '</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">'"</span><span class="p">)</span>
+</span><span id="make_model-96"><a href="#make_model-96"><span class="linenos">96</span></a>    <span class="c1"># Standardising (zero mean, unit variance) stops features measured in</span>
+</span><span id="make_model-97"><a href="#make_model-97"><span class="linenos">97</span></a>    <span class="c1"># degrees (hue) from dominating features measured as fractions 0-1.</span>
+</span><span id="make_model-98"><a href="#make_model-98"><span class="linenos">98</span></a>    <span class="k">return</span> <span class="n">make_pipeline</span><span class="p">(</span><span class="n">StandardScaler</span><span class="p">(),</span> <span class="n">est</span><span class="p">)</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>Return an (unfitted) StandardScaler + kNN pipeline.</p>
+            <div class="docstring"><p>Return an unfitted scikit-learn pipeline (standardise -> model).</p>
 
-<p><code>weights="distance"</code> gives closer neighbours a larger vote.</p>
+<h6 id="parameters">Parameters</h6>
+
+<ul>
+<li><strong>name</strong> ({"linear", "tree", "svr", "mlp", "knn"}):</li>
+</ul>
+
+<h6 id="raises">Raises</h6>
+
+<ul>
+<li><strong>ValueError</strong>: For an unknown model name.</li>
+</ul>
 </div>
 
 
                 </section>
-                <section id="select_k">
-                            <input id="select_k-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+                <section id="is_regressor">
+                            <input id="is_regressor-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">select_k</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">X</span>, </span><span class="param"><span class="n">y</span>, </span><span class="param"><span class="n">groups</span>, </span><span class="param"><span class="n">k_values</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">11</span><span class="p">,</span> <span class="mi">15</span><span class="p">,</span> <span class="mi">21</span><span class="p">)</span>, </span><span class="param"><span class="n">n_splits</span><span class="o">=</span><span class="mi">5</span></span><span class="return-annotation">):</span></span>
+        <span class="name">is_regressor</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">name</span><span class="p">:</span> <span class="nb">str</span></span><span class="return-annotation">) -> <span class="nb">bool</span>:</span></span>
 
-                <label class="view-source-button" for="select_k-view-source"><span>View Source</span></label>
+                <label class="view-source-button" for="is_regressor-view-source"><span>View Source</span></label>
 
     </div>
-    <a class="headerlink" href="#select_k"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="select_k-40"><a href="#select_k-40"><span class="linenos">40</span></a><span class="k">def</span><span class="w"> </span><span class="nf">select_k</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">groups</span><span class="p">,</span> <span class="n">k_values</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">11</span><span class="p">,</span> <span class="mi">15</span><span class="p">,</span> <span class="mi">21</span><span class="p">),</span> <span class="n">n_splits</span><span class="o">=</span><span class="mi">5</span><span class="p">):</span>
-</span><span id="select_k-41"><a href="#select_k-41"><span class="linenos">41</span></a><span class="w">    </span><span class="sd">"""Choose k by grouped cross-validation on the training data only.</span>
-</span><span id="select_k-42"><a href="#select_k-42"><span class="linenos">42</span></a>
-</span><span id="select_k-43"><a href="#select_k-43"><span class="linenos">43</span></a><span class="sd">    Groups are avocado IDs, so photos of the same fruit never appear in both</span>
-</span><span id="select_k-44"><a href="#select_k-44"><span class="linenos">44</span></a><span class="sd">    the fitting and validation parts of a fold.</span>
-</span><span id="select_k-45"><a href="#select_k-45"><span class="linenos">45</span></a>
-</span><span id="select_k-46"><a href="#select_k-46"><span class="linenos">46</span></a><span class="sd">    Returns</span>
-</span><span id="select_k-47"><a href="#select_k-47"><span class="linenos">47</span></a><span class="sd">    -------</span>
-</span><span id="select_k-48"><a href="#select_k-48"><span class="linenos">48</span></a><span class="sd">    best_k : int</span>
-</span><span id="select_k-49"><a href="#select_k-49"><span class="linenos">49</span></a><span class="sd">    scores : dict</span>
-</span><span id="select_k-50"><a href="#select_k-50"><span class="linenos">50</span></a><span class="sd">        Mean macro-F1 for every k tried.</span>
-</span><span id="select_k-51"><a href="#select_k-51"><span class="linenos">51</span></a><span class="sd">    """</span>
-</span><span id="select_k-52"><a href="#select_k-52"><span class="linenos">52</span></a>    <span class="n">n_splits</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">n_splits</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">groups</span><span class="p">)))</span>
-</span><span id="select_k-53"><a href="#select_k-53"><span class="linenos">53</span></a>    <span class="n">cv</span> <span class="o">=</span> <span class="n">GroupKFold</span><span class="p">(</span><span class="n">n_splits</span><span class="o">=</span><span class="n">n_splits</span><span class="p">)</span>
-</span><span id="select_k-54"><a href="#select_k-54"><span class="linenos">54</span></a>    <span class="n">scores</span> <span class="o">=</span> <span class="p">{}</span>
-</span><span id="select_k-55"><a href="#select_k-55"><span class="linenos">55</span></a>    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">k_values</span><span class="p">:</span>
-</span><span id="select_k-56"><a href="#select_k-56"><span class="linenos">56</span></a>        <span class="n">s</span> <span class="o">=</span> <span class="n">cross_val_score</span><span class="p">(</span><span class="n">make_knn</span><span class="p">(</span><span class="n">k</span><span class="p">),</span> <span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">groups</span><span class="o">=</span><span class="n">groups</span><span class="p">,</span> <span class="n">cv</span><span class="o">=</span><span class="n">cv</span><span class="p">,</span> <span class="n">scoring</span><span class="o">=</span><span class="s2">"f1_macro"</span><span class="p">)</span>
-</span><span id="select_k-57"><a href="#select_k-57"><span class="linenos">57</span></a>        <span class="n">scores</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span>
-</span><span id="select_k-58"><a href="#select_k-58"><span class="linenos">58</span></a>    <span class="n">best_k</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">scores</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">scores</span><span class="o">.</span><span class="n">get</span><span class="p">)</span>
-</span><span id="select_k-59"><a href="#select_k-59"><span class="linenos">59</span></a>    <span class="k">return</span> <span class="n">best_k</span><span class="p">,</span> <span class="n">scores</span>
+    <a class="headerlink" href="#is_regressor"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="is_regressor-101"><a href="#is_regressor-101"><span class="linenos">101</span></a><span class="k">def</span><span class="w"> </span><span class="nf">is_regressor</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+</span><span id="is_regressor-102"><a href="#is_regressor-102"><span class="linenos">102</span></a><span class="w">    </span><span class="sd">"""True for models that predict a continuous ripening index."""</span>
+</span><span id="is_regressor-103"><a href="#is_regressor-103"><span class="linenos">103</span></a>    <span class="k">return</span> <span class="n">name</span> <span class="o">!=</span> <span class="s2">"knn"</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>Choose k by grouped cross-validation on the training data only.</p>
+            <div class="docstring"><p>True for models that predict a continuous ripening index.</p>
+</div>
 
-<p>Groups are avocado IDs, so photos of the same fruit never appear in both
-the fitting and validation parts of a fold.</p>
+
+                </section>
+                <section id="fit_model">
+                            <input id="fit_model-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">fit_model</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">name</span><span class="p">:</span> <span class="nb">str</span>, </span><span class="param"><span class="n">X</span>, </span><span class="param"><span class="n">y</span>, </span><span class="param"><span class="n">groups</span><span class="o">=</span><span class="kc">None</span>, </span><span class="param"><span class="n">n_splits</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span></span><span class="return-annotation">):</span></span>
+
+                <label class="view-source-button" for="fit_model-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#fit_model"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="fit_model-106"><a href="#fit_model-106"><span class="linenos">106</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fit_model</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">groups</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">n_splits</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">):</span>
+</span><span id="fit_model-107"><a href="#fit_model-107"><span class="linenos">107</span></a><span class="w">    </span><span class="sd">"""Fit a model, tuning its settings by grouped cross-validation if needed.</span>
+</span><span id="fit_model-108"><a href="#fit_model-108"><span class="linenos">108</span></a>
+</span><span id="fit_model-109"><a href="#fit_model-109"><span class="linenos">109</span></a><span class="sd">    Settings are chosen using the training data only (``groups`` = avocado IDs,</span>
+</span><span id="fit_model-110"><a href="#fit_model-110"><span class="linenos">110</span></a><span class="sd">    so photos of one fruit never end up on both sides of a split).</span>
+</span><span id="fit_model-111"><a href="#fit_model-111"><span class="linenos">111</span></a><span class="sd">    Regressors are tuned for lowest mean absolute error, the kNN classifier for</span>
+</span><span id="fit_model-112"><a href="#fit_model-112"><span class="linenos">112</span></a><span class="sd">    highest macro-F1.</span>
+</span><span id="fit_model-113"><a href="#fit_model-113"><span class="linenos">113</span></a>
+</span><span id="fit_model-114"><a href="#fit_model-114"><span class="linenos">114</span></a><span class="sd">    Returns</span>
+</span><span id="fit_model-115"><a href="#fit_model-115"><span class="linenos">115</span></a><span class="sd">    -------</span>
+</span><span id="fit_model-116"><a href="#fit_model-116"><span class="linenos">116</span></a><span class="sd">    model : fitted estimator</span>
+</span><span id="fit_model-117"><a href="#fit_model-117"><span class="linenos">117</span></a><span class="sd">    best_params : dict</span>
+</span><span id="fit_model-118"><a href="#fit_model-118"><span class="linenos">118</span></a><span class="sd">        Chosen settings (empty for linear regression).</span>
+</span><span id="fit_model-119"><a href="#fit_model-119"><span class="linenos">119</span></a><span class="sd">    """</span>
+</span><span id="fit_model-120"><a href="#fit_model-120"><span class="linenos">120</span></a>    <span class="n">grid</span> <span class="o">=</span> <span class="n">PARAM_GRIDS</span><span class="p">[</span><span class="n">name</span><span class="p">]</span>
+</span><span id="fit_model-121"><a href="#fit_model-121"><span class="linenos">121</span></a>    <span class="n">y_fit</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="nb">float</span><span class="p">)</span> <span class="k">if</span> <span class="n">is_regressor</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>
+</span><span id="fit_model-122"><a href="#fit_model-122"><span class="linenos">122</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">grid</span> <span class="ow">or</span> <span class="n">groups</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="fit_model-123"><a href="#fit_model-123"><span class="linenos">123</span></a>        <span class="k">return</span> <span class="n">make_model</span><span class="p">(</span><span class="n">name</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">y_fit</span><span class="p">),</span> <span class="p">{}</span>
+</span><span id="fit_model-124"><a href="#fit_model-124"><span class="linenos">124</span></a>    <span class="n">n_splits</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">n_splits</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">groups</span><span class="p">)))</span>
+</span><span id="fit_model-125"><a href="#fit_model-125"><span class="linenos">125</span></a>    <span class="n">search</span> <span class="o">=</span> <span class="n">GridSearchCV</span><span class="p">(</span><span class="n">make_model</span><span class="p">(</span><span class="n">name</span><span class="p">),</span> <span class="n">grid</span><span class="p">,</span> <span class="n">cv</span><span class="o">=</span><span class="n">GroupKFold</span><span class="p">(</span><span class="n">n_splits</span><span class="o">=</span><span class="n">n_splits</span><span class="p">),</span>
+</span><span id="fit_model-126"><a href="#fit_model-126"><span class="linenos">126</span></a>                          <span class="n">scoring</span><span class="o">=</span><span class="s2">"neg_mean_absolute_error"</span> <span class="k">if</span> <span class="n">is_regressor</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="k">else</span> <span class="s2">"f1_macro"</span><span class="p">)</span>
+</span><span id="fit_model-127"><a href="#fit_model-127"><span class="linenos">127</span></a>    <span class="n">search</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">y_fit</span><span class="p">,</span> <span class="n">groups</span><span class="o">=</span><span class="n">groups</span><span class="p">)</span>
+</span><span id="fit_model-128"><a href="#fit_model-128"><span class="linenos">128</span></a>    <span class="k">return</span> <span class="n">search</span><span class="o">.</span><span class="n">best_estimator_</span><span class="p">,</span> <span class="n">search</span><span class="o">.</span><span class="n">best_params_</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Fit a model, tuning its settings by grouped cross-validation if needed.</p>
+
+<p>Settings are chosen using the training data only (<code>groups</code> = avocado IDs,
+so photos of one fruit never end up on both sides of a split).
+Regressors are tuned for lowest mean absolute error, the kNN classifier for
+highest macro-F1.</p>
 
 <h6 id="returns">Returns</h6>
 
 <ul>
-<li><p><strong>best_k</strong> (int):</p></li>
-<li><p><strong>scores</strong> (dict):
-Mean macro-F1 for every k tried.</p></li>
+<li><p><strong>model</strong> (fitted estimator):</p></li>
+<li><p><strong>best_params</strong> (dict):
+Chosen settings (empty for linear regression).</p></li>
 </ul>
+</div>
+
+
+                </section>
+                <section id="to_stage">
+                            <input id="to_stage-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">to_stage</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">index_pred</span></span><span class="return-annotation">) -> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>:</span></span>
+
+                <label class="view-source-button" for="to_stage-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#to_stage"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="to_stage-131"><a href="#to_stage-131"><span class="linenos">131</span></a><span class="k">def</span><span class="w"> </span><span class="nf">to_stage</span><span class="p">(</span><span class="n">index_pred</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+</span><span id="to_stage-132"><a href="#to_stage-132"><span class="linenos">132</span></a><span class="w">    </span><span class="sd">"""Convert continuous ripening-index predictions to integer stages 1-5.</span>
+</span><span id="to_stage-133"><a href="#to_stage-133"><span class="linenos">133</span></a>
+</span><span id="to_stage-134"><a href="#to_stage-134"><span class="linenos">134</span></a><span class="sd">    Values are rounded to the nearest integer and clipped to the valid range,</span>
+</span><span id="to_stage-135"><a href="#to_stage-135"><span class="linenos">135</span></a><span class="sd">    so e.g. 0.7 -&gt; 1, 3.4 -&gt; 3, 3.6 -&gt; 4 and 5.8 -&gt; 5.</span>
+</span><span id="to_stage-136"><a href="#to_stage-136"><span class="linenos">136</span></a><span class="sd">    """</span>
+</span><span id="to_stage-137"><a href="#to_stage-137"><span class="linenos">137</span></a>    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">rint</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">index_pred</span><span class="p">,</span> <span class="nb">float</span><span class="p">)),</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Convert continuous ripening-index predictions to integer stages 1-5.</p>
+
+<p>Values are rounded to the nearest integer and clipped to the valid range,
+so e.g. 0.7 -> 1, 3.4 -> 3, 3.6 -> 4 and 5.8 -> 5.</p>
+</div>
+
+
+                </section>
+                <section id="linear_coefficients">
+                            <input id="linear_coefficients-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">linear_coefficients</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">model</span>, </span><span class="param"><span class="n">feature_names</span></span><span class="return-annotation">) -> <span class="nb">dict</span>:</span></span>
+
+                <label class="view-source-button" for="linear_coefficients-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#linear_coefficients"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="linear_coefficients-140"><a href="#linear_coefficients-140"><span class="linenos">140</span></a><span class="k">def</span><span class="w"> </span><span class="nf">linear_coefficients</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">feature_names</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+</span><span id="linear_coefficients-141"><a href="#linear_coefficients-141"><span class="linenos">141</span></a><span class="w">    </span><span class="sd">"""Standardised coefficients of a fitted linear-regression pipeline.</span>
+</span><span id="linear_coefficients-142"><a href="#linear_coefficients-142"><span class="linenos">142</span></a>
+</span><span id="linear_coefficients-143"><a href="#linear_coefficients-143"><span class="linenos">143</span></a><span class="sd">    Because inputs are standardised, each coefficient is the change in</span>
+</span><span id="linear_coefficients-144"><a href="#linear_coefficients-144"><span class="linenos">144</span></a><span class="sd">    predicted ripening index for a one-standard-deviation change in that</span>
+</span><span id="linear_coefficients-145"><a href="#linear_coefficients-145"><span class="linenos">145</span></a><span class="sd">    feature, so their sizes can be compared directly.</span>
+</span><span id="linear_coefficients-146"><a href="#linear_coefficients-146"><span class="linenos">146</span></a><span class="sd">    """</span>
+</span><span id="linear_coefficients-147"><a href="#linear_coefficients-147"><span class="linenos">147</span></a>    <span class="n">lr</span> <span class="o">=</span> <span class="n">model</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+</span><span id="linear_coefficients-148"><a href="#linear_coefficients-148"><span class="linenos">148</span></a>    <span class="k">return</span> <span class="p">{</span><span class="s2">"intercept"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">lr</span><span class="o">.</span><span class="n">intercept_</span><span class="p">),</span>
+</span><span id="linear_coefficients-149"><a href="#linear_coefficients-149"><span class="linenos">149</span></a>            <span class="o">**</span><span class="p">{</span><span class="n">n</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">for</span> <span class="n">n</span><span class="p">,</span> <span class="n">c</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">feature_names</span><span class="p">,</span> <span class="n">lr</span><span class="o">.</span><span class="n">coef_</span><span class="p">)}}</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Standardised coefficients of a fitted linear-regression pipeline.</p>
+
+<p>Because inputs are standardised, each coefficient is the change in
+predicted ripening index for a one-standard-deviation change in that
+feature, so their sizes can be compared directly.</p>
 </div>
 
 
@@ -251,48 +515,46 @@ Mean macro-F1 for every k tried.</p></li>
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">kiosk_message</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">stage</span><span class="p">:</span> <span class="nb">int</span>, </span><span class="param"><span class="n">confidence</span><span class="p">:</span> <span class="nb">float</span>, </span><span class="param"><span class="n">k_rate</span><span class="p">:</span> <span class="nb">float</span>, </span><span class="param"><span class="n">t0</span><span class="p">:</span> <span class="nb">float</span></span><span class="return-annotation">) -> <span class="nb">str</span>:</span></span>
+        <span class="name">kiosk_message</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">index_pred</span><span class="p">:</span> <span class="nb">float</span>, </span><span class="param"><span class="n">k_rate</span><span class="p">:</span> <span class="nb">float</span>, </span><span class="param"><span class="n">t0</span><span class="p">:</span> <span class="nb">float</span></span><span class="return-annotation">) -> <span class="nb">str</span>:</span></span>
 
                 <label class="view-source-button" for="kiosk_message-view-source"><span>View Source</span></label>
 
     </div>
     <a class="headerlink" href="#kiosk_message"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="kiosk_message-62"><a href="#kiosk_message-62"><span class="linenos">62</span></a><span class="k">def</span><span class="w"> </span><span class="nf">kiosk_message</span><span class="p">(</span><span class="n">stage</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">confidence</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">k_rate</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">t0</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="kiosk_message-63"><a href="#kiosk_message-63"><span class="linenos">63</span></a><span class="w">    </span><span class="sd">"""Turn a predicted stage into the message a shopper would see.</span>
-</span><span id="kiosk_message-64"><a href="#kiosk_message-64"><span class="linenos">64</span></a>
-</span><span id="kiosk_message-65"><a href="#kiosk_message-65"><span class="linenos">65</span></a><span class="sd">    Parameters</span>
-</span><span id="kiosk_message-66"><a href="#kiosk_message-66"><span class="linenos">66</span></a><span class="sd">    ----------</span>
-</span><span id="kiosk_message-67"><a href="#kiosk_message-67"><span class="linenos">67</span></a><span class="sd">    stage : int</span>
-</span><span id="kiosk_message-68"><a href="#kiosk_message-68"><span class="linenos">68</span></a><span class="sd">        Predicted ripening stage (1-5).</span>
-</span><span id="kiosk_message-69"><a href="#kiosk_message-69"><span class="linenos">69</span></a><span class="sd">    confidence : float</span>
-</span><span id="kiosk_message-70"><a href="#kiosk_message-70"><span class="linenos">70</span></a><span class="sd">        Classifier probability for that stage (0-1).</span>
-</span><span id="kiosk_message-71"><a href="#kiosk_message-71"><span class="linenos">71</span></a><span class="sd">    k_rate, t0 : float</span>
-</span><span id="kiosk_message-72"><a href="#kiosk_message-72"><span class="linenos">72</span></a><span class="sd">        Fitted logistic parameters for room-temperature storage, used to</span>
-</span><span id="kiosk_message-73"><a href="#kiosk_message-73"><span class="linenos">73</span></a><span class="sd">        estimate days until ready.</span>
-</span><span id="kiosk_message-74"><a href="#kiosk_message-74"><span class="linenos">74</span></a><span class="sd">    """</span>
-</span><span id="kiosk_message-75"><a href="#kiosk_message-75"><span class="linenos">75</span></a>    <span class="n">name</span> <span class="o">=</span> <span class="n">STAGE_NAMES</span><span class="p">[</span><span class="n">stage</span><span class="p">]</span>
-</span><span id="kiosk_message-76"><a href="#kiosk_message-76"><span class="linenos">76</span></a>    <span class="n">conf</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"(confidence </span><span class="si">{</span><span class="n">confidence</span><span class="si">:</span><span class="s2">.0%</span><span class="si">}</span><span class="s2">)"</span>
-</span><span id="kiosk_message-77"><a href="#kiosk_message-77"><span class="linenos">77</span></a>    <span class="k">if</span> <span class="n">stage</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">):</span>
-</span><span id="kiosk_message-78"><a href="#kiosk_message-78"><span class="linenos">78</span></a>        <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: ready to eat now </span><span class="si">{</span><span class="n">conf</span><span class="si">}</span><span class="s2">"</span>
-</span><span id="kiosk_message-79"><a href="#kiosk_message-79"><span class="linenos">79</span></a>    <span class="k">if</span> <span class="n">stage</span> <span class="o">==</span> <span class="mi">5</span><span class="p">:</span>
-</span><span id="kiosk_message-80"><a href="#kiosk_message-80"><span class="linenos">80</span></a>        <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: past best quality, not recommended </span><span class="si">{</span><span class="n">conf</span><span class="si">}</span><span class="s2">"</span>
-</span><span id="kiosk_message-81"><a href="#kiosk_message-81"><span class="linenos">81</span></a>    <span class="n">days</span> <span class="o">=</span> <span class="n">days_until_ready</span><span class="p">(</span><span class="n">stage</span><span class="p">,</span> <span class="n">k_rate</span><span class="p">,</span> <span class="n">t0</span><span class="p">)</span>
-</span><span id="kiosk_message-82"><a href="#kiosk_message-82"><span class="linenos">82</span></a>    <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: about </span><span class="si">{</span><span class="n">days</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2"> more day(s) at room temperature </span><span class="si">{</span><span class="n">conf</span><span class="si">}</span><span class="s2">"</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="kiosk_message-152"><a href="#kiosk_message-152"><span class="linenos">152</span></a><span class="k">def</span><span class="w"> </span><span class="nf">kiosk_message</span><span class="p">(</span><span class="n">index_pred</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">k_rate</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">t0</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="kiosk_message-153"><a href="#kiosk_message-153"><span class="linenos">153</span></a><span class="w">    </span><span class="sd">"""Turn a predicted ripening index into the message a shopper would see.</span>
+</span><span id="kiosk_message-154"><a href="#kiosk_message-154"><span class="linenos">154</span></a>
+</span><span id="kiosk_message-155"><a href="#kiosk_message-155"><span class="linenos">155</span></a><span class="sd">    Parameters</span>
+</span><span id="kiosk_message-156"><a href="#kiosk_message-156"><span class="linenos">156</span></a><span class="sd">    ----------</span>
+</span><span id="kiosk_message-157"><a href="#kiosk_message-157"><span class="linenos">157</span></a><span class="sd">    index_pred : float</span>
+</span><span id="kiosk_message-158"><a href="#kiosk_message-158"><span class="linenos">158</span></a><span class="sd">        Continuous predicted ripening index (any real number; it is rounded</span>
+</span><span id="kiosk_message-159"><a href="#kiosk_message-159"><span class="linenos">159</span></a><span class="sd">        to a stage for the label).</span>
+</span><span id="kiosk_message-160"><a href="#kiosk_message-160"><span class="linenos">160</span></a><span class="sd">    k_rate, t0 : float</span>
+</span><span id="kiosk_message-161"><a href="#kiosk_message-161"><span class="linenos">161</span></a><span class="sd">        Fitted logistic parameters for room-temperature (20 degC) storage,</span>
+</span><span id="kiosk_message-162"><a href="#kiosk_message-162"><span class="linenos">162</span></a><span class="sd">        used to estimate the number of days until the fruit is ready.</span>
+</span><span id="kiosk_message-163"><a href="#kiosk_message-163"><span class="linenos">163</span></a><span class="sd">    """</span>
+</span><span id="kiosk_message-164"><a href="#kiosk_message-164"><span class="linenos">164</span></a>    <span class="n">stage</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">to_stage</span><span class="p">(</span><span class="n">index_pred</span><span class="p">))</span>
+</span><span id="kiosk_message-165"><a href="#kiosk_message-165"><span class="linenos">165</span></a>    <span class="n">name</span> <span class="o">=</span> <span class="n">STAGE_NAMES</span><span class="p">[</span><span class="n">stage</span><span class="p">]</span>
+</span><span id="kiosk_message-166"><a href="#kiosk_message-166"><span class="linenos">166</span></a>    <span class="k">if</span> <span class="n">stage</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">):</span>
+</span><span id="kiosk_message-167"><a href="#kiosk_message-167"><span class="linenos">167</span></a>        <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: ready to eat now (index </span><span class="si">{</span><span class="n">index_pred</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">)"</span>
+</span><span id="kiosk_message-168"><a href="#kiosk_message-168"><span class="linenos">168</span></a>    <span class="k">if</span> <span class="n">stage</span> <span class="o">==</span> <span class="mi">5</span><span class="p">:</span>
+</span><span id="kiosk_message-169"><a href="#kiosk_message-169"><span class="linenos">169</span></a>        <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: past best quality, not recommended (index </span><span class="si">{</span><span class="n">index_pred</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">)"</span>
+</span><span id="kiosk_message-170"><a href="#kiosk_message-170"><span class="linenos">170</span></a>    <span class="n">days</span> <span class="o">=</span> <span class="n">days_until_ready</span><span class="p">(</span><span class="n">index_pred</span><span class="p">,</span> <span class="n">k_rate</span><span class="p">,</span> <span class="n">t0</span><span class="p">)</span>
+</span><span id="kiosk_message-171"><a href="#kiosk_message-171"><span class="linenos">171</span></a>    <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: about </span><span class="si">{</span><span class="n">days</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2"> more day(s) at room temperature (index </span><span class="si">{</span><span class="n">index_pred</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">)"</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>Turn a predicted stage into the message a shopper would see.</p>
+            <div class="docstring"><p>Turn a predicted ripening index into the message a shopper would see.</p>
 
 <h6 id="parameters">Parameters</h6>
 
 <ul>
-<li><strong>stage</strong> (int):
-Predicted ripening stage (1-5).</li>
-<li><strong>confidence</strong> (float):
-Classifier probability for that stage (0-1).</li>
+<li><strong>index_pred</strong> (float):
+Continuous predicted ripening index (any real number; it is rounded
+to a stage for the label).</li>
 <li><strong>k_rate, t0</strong> (float):
-Fitted logistic parameters for room-temperature storage, used to
-estimate days until ready.</li>
+Fitted logistic parameters for room-temperature (20 degC) storage,
+used to estimate the number of days until the fruit is ready.</li>
 </ul>
 </div>
 

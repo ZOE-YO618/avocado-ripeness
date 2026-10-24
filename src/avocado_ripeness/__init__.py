@@ -7,7 +7,7 @@ Modules
 -------
 - `avocado_ripeness.features`       : fruit segmentation and HSV colour features
 - `avocado_ripeness.baseline`       : single-feature colour-threshold baseline classifier
-- `avocado_ripeness.classifier`     : k-nearest-neighbours classifier, k selection, kiosk message
+- `avocado_ripeness.classifier`     : linear regression (final model) and alternative models, kiosk message
 - `avocado_ripeness.ripening_model` : logistic ripening curve fitting (scipy curve_fit), Q10
 
 Run the full experiment with ``python scripts/run_pipeline.py --image-dir <folder>``.

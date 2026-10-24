@@ -129,16 +129,22 @@ def time_to_index(target: float, k: float, t0: float,
     return t0 - np.log((r_max - r_min) / (target - r_min) - 1.0) / k
 
 
-def days_until_ready(stage: int, k: float, t0: float, ready_index: float = 3.0) -> float:
-    """Estimate days until a fruit at ``stage`` reaches the ready-to-eat stage.
+def days_until_ready(index: float, k: float, t0: float, ready_index: float = 3.0,
+                     min_index: float = 1.5) -> float:
+    """Estimate days until a fruit with ripening index ``index`` becomes ready.
 
-    The fruit's current position on the curve is taken as the time at which
-    the curve passes the middle of its stage (stage 1 -> 1.5, stage 2 -> 2.5).
-    Returns 0 for stages that are already ready (>= ``ready_index``).
+    The fruit's current position on the curve is the time at which the fitted
+    curve passes ``index``; the answer is the time difference to the point
+    where the curve reaches ``ready_index`` (stage 3 = ripe, first phase).
+
+    Indices below ``min_index`` are raised to ``min_index`` (the middle of
+    stage 1) because the bounded logistic only approaches 1 as t -> -inf, so
+    an index of exactly 1 has no finite time. Returns 0 if the fruit is
+    already at or past ``ready_index``.
     """
-    if stage >= ready_index:
+    if index >= ready_index:
         return 0.0
-    t_now = time_to_index(stage + 0.5, k, t0)
+    t_now = time_to_index(max(float(index), min_index), k, t0)
     t_ready = time_to_index(ready_index, k, t0)
     return max(0.0, float(t_ready - t_now))
 

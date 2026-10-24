@@ -30,26 +30,32 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (accuracy_score, classification_report, confusion_matrix,
-                             f1_score, mean_absolute_error)
+                             f1_score, mean_absolute_error, mean_squared_error, r2_score)
 from sklearn.model_selection import GroupKFold
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from avocado_ripeness.baseline import ThresholdClassifier, hue_ripeness_score  # noqa: E402
-from avocado_ripeness.classifier import STAGE_NAMES, kiosk_message, make_knn, select_k  # noqa: E402
+from avocado_ripeness.classifier import (MODEL_LABELS, STAGE_NAMES, fit_model,  # noqa: E402
+                                         is_regressor, kiosk_message, linear_coefficients, to_stage)
 from avocado_ripeness.features import (FEATURE_NAMES, LIGHTING_INVARIANT_FEATURES,  # noqa: E402
                                        adjust_brightness, extract_features, load_image)
 
-INV_COLS = [FEATURE_NAMES.index(n) for n in LIGHTING_INVARIANT_FEATURES]
 from avocado_ripeness.ripening_model import (days_until_ready, fit_logistic, q10,  # noqa: E402
                                              time_to_index)
 
+INV_COLS = [FEATURE_NAMES.index(n) for n in LIGHTING_INVARIANT_FEATURES]
 CLASSES = [1, 2, 3, 4, 5]
+MODELS = ["linear", "tree", "svr", "mlp", "knn"]   # compared on lighting-invariant features
+FINAL = "linear"                                    # selected model (see report section 4)
 GROUP_LABEL = {"T10": "10 °C", "T20": "20 °C", "Tam": "Ambient"}
 
 # Reference palette (validated categorical slots 1-3) and neutral inks
-C_BLUE, C_ORANGE, C_AQUA = "#2a78d6", "#eb6834", "#1baf7a"
+C_BLUE, C_ORANGE, C_AQUA, C_YELLOW, C_MAGENTA, C_GREEN = \
+    "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"
+MODEL_COLOR = {"baseline": C_ORANGE, "linear": C_BLUE, "tree": C_AQUA, "svr": C_YELLOW,
+               "mlp": C_MAGENTA, "knn": C_GREEN}
 INK, INK2, GRID, SURFACE = "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
 GROUP_COLOR = {"T10": C_BLUE, "T20": C_ORANGE, "Tam": C_AQUA}
 
@@ -97,47 +103,96 @@ def extract_all(rows: pd.DataFrame, image_dir: Path, size: int | None,
 
 
 # --------------------------------------------------------------------------- metrics
-def summarise(y_true, y_pred) -> dict:
-    """Accuracy, macro precision/recall/F1, within-one-stage accuracy, stage MAE."""
-    rep = classification_report(y_true, y_pred, labels=CLASSES, output_dict=True, zero_division=0)
-    return {
-        "accuracy": accuracy_score(y_true, y_pred),
+def summarise(y_true, stage_pred, index_pred=None) -> dict:
+    """Stage-level and (if available) continuous-index metrics.
+
+    Stage metrics: accuracy, macro precision/recall/F1, within-one-stage
+    accuracy, stage MAE and "ready to eat" (stage 3-4 vs not) accuracy.
+    Index metrics (regressors only): MAE, RMSE and R^2 of the continuous
+    prediction against the true index.
+    """
+    y_true = np.asarray(y_true)
+    stage_pred = np.asarray(stage_pred)
+    rep = classification_report(y_true, stage_pred, labels=CLASSES, output_dict=True, zero_division=0)
+    out = {
+        "accuracy": accuracy_score(y_true, stage_pred),
         "macro_precision": rep["macro avg"]["precision"],
         "macro_recall": rep["macro avg"]["recall"],
-        "macro_f1": f1_score(y_true, y_pred, labels=CLASSES, average="macro", zero_division=0),
-        "within_one_accuracy": float(np.mean(np.abs(np.asarray(y_true) - np.asarray(y_pred)) <= 1)),
-        "stage_mae": mean_absolute_error(y_true, y_pred),
+        "macro_f1": f1_score(y_true, stage_pred, labels=CLASSES, average="macro", zero_division=0),
+        "within_one_accuracy": float(np.mean(np.abs(y_true - stage_pred) <= 1)),
+        "stage_mae": mean_absolute_error(y_true, stage_pred),
+        "ready_to_eat_accuracy": float(np.mean(np.isin(stage_pred, [3, 4]) == np.isin(y_true, [3, 4]))),
         "per_class": {str(c): {k: rep[str(c)][k] for k in ("precision", "recall", "f1-score", "support")}
                       for c in CLASSES},
     }
+    if index_pred is not None:
+        out["index_mae"] = mean_absolute_error(y_true, index_pred)
+        out["index_rmse"] = float(np.sqrt(mean_squared_error(y_true, index_pred)))
+        out["index_r2"] = r2_score(y_true, index_pred)
+    return out
 
 
-def run_cv(X, y, groups, n_splits=5, cols=None):
-    """Outer grouped CV: baseline vs kNN (k chosen by inner grouped CV).
-
-    ``cols`` selects which feature columns the kNN uses (default: all).
-    """
-    cols = list(range(X.shape[1])) if cols is None else cols
-    outer = GroupKFold(n_splits=n_splits)
-    pred_base = np.zeros_like(y)
-    pred_knn = np.zeros_like(y)
-    proba_knn = np.zeros(len(y))
-    chosen_k, k_curves = [], []
+def baseline_cv(X, y, groups, Xtest=None, n_splits=5):
+    """Out-of-fold predictions of the colour-threshold baseline."""
+    Xtest = X if Xtest is None else Xtest
     hue_idx = FEATURE_NAMES.index("hue_mean_deg")
-    for tr, te in outer.split(X, y, groups):
+    pred = np.zeros_like(y)
+    for tr, te in GroupKFold(n_splits=n_splits).split(X, y, groups):
         base = ThresholdClassifier().fit(hue_ripeness_score(X[tr, hue_idx]), y[tr])
-        pred_base[te] = base.predict(hue_ripeness_score(X[te, hue_idx]))
+        pred[te] = base.predict(hue_ripeness_score(Xtest[te, hue_idx]))
+    return pred
 
-        k, curve = select_k(X[tr][:, cols], y[tr], groups[tr])
-        chosen_k.append(k)
-        k_curves.append(curve)
-        model = make_knn(k).fit(X[tr][:, cols], y[tr])
-        pred_knn[te] = model.predict(X[te][:, cols])
-        proba_knn[te] = model.predict_proba(X[te][:, cols]).max(axis=1)
-    return pred_base, pred_knn, proba_knn, chosen_k, k_curves
+
+def model_cv(name, X, y, groups, cols, Xtest=None, n_splits=5):
+    """Grouped outer CV for one model; settings tuned inside each training fold.
+
+    Returns out-of-fold predictions (continuous index for regressors, stage
+    for kNN), the chosen settings per fold, and timing information.
+    """
+    Xtest = X if Xtest is None else Xtest
+    pred = np.zeros(len(y))
+    params, fit_s, pred_s = [], 0.0, 0.0
+    for tr, te in GroupKFold(n_splits=n_splits).split(X, y, groups):
+        t0 = time.perf_counter()
+        model, bp = fit_model(name, X[tr][:, cols], y[tr], groups[tr])
+        fit_s += time.perf_counter() - t0
+        t0 = time.perf_counter()
+        pred[te] = model.predict(Xtest[te][:, cols])
+        pred_s += time.perf_counter() - t0
+        params.append({k.split("__")[-1]: (list(v) if isinstance(v, tuple) else v) for k, v in bp.items()})
+    return pred, params, {"tuning_and_fit_s": fit_s, "predict_us_per_sample": pred_s / len(y) * 1e6}
+
+
+def evaluate(name, y, pred):
+    """Wrap ``summarise`` for a model's out-of-fold predictions."""
+    if is_regressor(name):
+        return summarise(y, to_stage(pred), pred)
+    return summarise(y, pred.astype(int), pred)
+
+
+def n_stored_values(model) -> int:
+    """Rough model size: number of numbers the fitted model must store."""
+    est = model[-1]
+    if hasattr(est, "coef_") and not hasattr(est, "support_vectors_"):
+        return int(np.size(est.coef_) + 1)
+    if hasattr(est, "support_vectors_"):
+        return int(est.support_vectors_.size + est.dual_coef_.size + 1)
+    if hasattr(est, "tree_"):
+        return int(est.tree_.node_count * 3)
+    if hasattr(est, "coefs_"):
+        return int(sum(w.size for w in est.coefs_) + sum(b.size for b in est.intercepts_))
+    if hasattr(est, "_fit_X"):
+        return int(est._fit_X.size)
+    return -1
 
 
 # --------------------------------------------------------------------------- figures
+def _save(fig, path):
+    fig.tight_layout()
+    fig.savefig(path, dpi=200)
+    plt.close(fig)
+
+
 def fig_confusion(cms, titles, path):
     fig, axes = plt.subplots(1, len(cms), figsize=(4.4 * len(cms), 4))
     for ax, cm, title in zip(axes, cms, titles):
@@ -153,23 +208,7 @@ def fig_confusion(cms, titles, path):
         ax.set_xlabel("Predicted stage")
         ax.set_ylabel("True stage")
         ax.set_title(title)
-    fig.tight_layout()
-    fig.savefig(path, dpi=200)
-    plt.close(fig)
-
-
-def fig_k_selection(k_curves, path):
-    ks = sorted(k_curves[0])
-    vals = np.array([[c[k] for k in ks] for c in k_curves])
-    fig, ax = plt.subplots(figsize=(5, 3.2))
-    ax.plot(ks, vals.mean(0), color=C_BLUE, marker="o", markersize=5)
-    ax.fill_between(ks, vals.min(0), vals.max(0), color=C_BLUE, alpha=0.15, linewidth=0)
-    ax.set_xlabel("Number of neighbours k")
-    ax.set_ylabel("Inner-CV macro F1")
-    ax.set_title("Choosing k (mean and range over outer folds)")
-    fig.tight_layout()
-    fig.savefig(path, dpi=200)
-    plt.close(fig)
+    _save(fig, path)
 
 
 def fig_curves(meta, fits, path):
@@ -190,51 +229,75 @@ def fig_curves(meta, fits, path):
     ax.set_ylim(0.8, 5.2)
     ax.set_title("Logistic ripening curves (lines) vs daily mean index (dots)")
     ax.legend(frameon=False, loc="lower right")
-    fig.tight_layout()
-    fig.savefig(path, dpi=200)
-    plt.close(fig)
+    _save(fig, path)
 
 
-def fig_bars(labels, series, ylabel, title, path):
+def fig_bars(labels, series, ylabel, title, path, figsize=(7, 3.6), ncol=None, fmt="{:.2f}"):
     """Grouped bar chart. ``series`` is a list of (name, values, colour)."""
     x = np.arange(len(labels))
     n = len(series)
-    w = 0.8 / n
-    fig, ax = plt.subplots(figsize=(7, 3.6))
-    all_bars = []
+    w = 0.84 / n
+    fig, ax = plt.subplots(figsize=figsize)
     for i, (name, vals, col) in enumerate(series):
         offs = (i - (n - 1) / 2) * w
-        all_bars.append(ax.bar(x + offs, vals, w - 0.02, color=col, label=name))
-    for bars in all_bars:
-        for b in bars:
-            ax.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.01, f"{b.get_height():.2f}",
-                    ha="center", va="bottom", fontsize=8, color=INK2)
+        bars = ax.bar(x + offs, vals, w - 0.015, color=col, label=name)
+        if n <= 3:
+            for b in bars:
+                ax.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.01, fmt.format(b.get_height()),
+                        ha="center", va="bottom", fontsize=8, color=INK2)
     ax.set_xticks(x, labels)
-    ax.set_ylim(0, 1.05)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
-    ax.legend(frameon=False, ncol=n, loc="upper left", bbox_to_anchor=(0, 1.0))
-    ax.set_ylim(0, 1.15)
-    fig.tight_layout()
-    fig.savefig(path, dpi=200)
-    plt.close(fig)
+    ax.legend(frameon=False, ncol=ncol or n, loc="upper left", bbox_to_anchor=(0, 1.0), fontsize=8.5)
+    ax.set_ylim(0, 1.18)
+    _save(fig, path)
+
+
+def fig_pred_vs_true(y, pred, path):
+    """Strip plot of continuous linear-regression predictions per true stage."""
+    rng = np.random.default_rng(0)
+    fig, ax = plt.subplots(figsize=(5.6, 3.8))
+    for c in CLASSES:
+        m = y == c
+        ax.scatter(c + rng.uniform(-0.18, 0.18, m.sum()), pred[m], s=9, color=C_BLUE, alpha=0.45, linewidth=0)
+        ax.plot([c - 0.28, c + 0.28], [np.median(pred[m])] * 2, color=INK, linewidth=2)
+    ax.plot([0.6, 5.4], [0.6, 5.4], color=INK2, linestyle="--", linewidth=1, label="perfect prediction")
+    for b in (1.5, 2.5, 3.5, 4.5):
+        ax.axhline(b, color=GRID, linewidth=1, zorder=0)
+    ax.set_xticks(CLASSES)
+    ax.set_xlabel("True ripening stage")
+    ax.set_ylabel("Predicted ripening index")
+    ax.set_title("Linear regression: predictions on unseen avocados")
+    ax.legend(frameon=False, loc="upper left", fontsize=8.5)
+    _save(fig, path)
+
+
+def fig_coefficients(coefs, path):
+    names = [n for n in LIGHTING_INVARIANT_FEATURES]
+    vals = np.array([coefs[n] for n in names])
+    order = np.argsort(np.abs(vals))
+    fig, ax = plt.subplots(figsize=(5.6, 3.2))
+    ax.barh(np.array(names)[order], vals[order], color=[C_BLUE if v > 0 else C_ORANGE for v in vals[order]])
+    ax.axvline(0, color=INK2, linewidth=1)
+    ax.set_xlabel("Change in predicted index per 1 standard deviation")
+    ax.set_title("Linear regression coefficients (standardised)")
+    ax.grid(axis="y", visible=False)
+    _save(fig, path)
 
 
 def fig_resolution(res, path):
     sizes = [r["size_label"] for r in res]
     fig, axes = plt.subplots(1, 2, figsize=(9, 3.2))
-    axes[0].plot(sizes, [r["knn_macro_f1"] for r in res], marker="o", color=C_BLUE)
-    axes[0].set_ylabel("kNN (lighting-invariant) macro F1")
+    axes[0].plot(sizes, [r["index_mae"] for r in res], marker="o", color=C_BLUE)
+    axes[0].set_ylabel("Linear regression MAE (stages)")
     axes[0].set_ylim(0, 1)
-    axes[0].set_title("Accuracy vs input resolution")
+    axes[0].set_title("Error vs input resolution")
     axes[1].plot(sizes, [r["ms_per_image"] for r in res], marker="o", color=C_BLUE)
     axes[1].set_ylabel("Feature extraction time (ms / image)")
     axes[1].set_title("Runtime vs input resolution")
     for ax in axes:
         ax.set_xlabel("Image size (pixels per side)")
-    fig.tight_layout()
-    fig.savefig(path, dpi=200)
-    plt.close(fig)
+    _save(fig, path)
 
 
 def fig_examples(rows, image_dir, path):
@@ -253,9 +316,7 @@ def fig_examples(rows, image_dir, path):
             a.axis("off")
     axes[0, 0].text(-0.1, 0.5, "Photo", transform=axes[0, 0].transAxes, rotation=90, va="center", ha="right")
     axes[1, 0].text(-0.1, 0.5, "Fruit mask", transform=axes[1, 0].transAxes, rotation=90, va="center", ha="right")
-    fig.tight_layout()
-    fig.savefig(path, dpi=200)
-    plt.close(fig)
+    _save(fig, path)
 
 
 # --------------------------------------------------------------------------- main
@@ -290,77 +351,76 @@ def main(argv=None):
     metrics["feature_extraction_ms_per_image_200px"] = sec * 1000
     fig_examples(rows, args.image_dir, figs / "examples_segmentation.png")
 
-    # 3. Baseline vs kNN (all features) vs kNN (lighting-invariant), grouped 5-fold CV
-    pred_base, pred_knn, proba_knn, chosen_k, k_curves = run_cv(X, y, groups)
-    _, pred_inv, proba_inv, chosen_k_inv, _ = run_cv(X, y, groups, cols=INV_COLS)
+    # 3. Model comparison, grouped 5-fold CV (test avocados never seen in training)
+    pred_base = baseline_cv(X, y, groups)
     metrics["baseline"] = summarise(y, pred_base)
-    metrics["knn"] = summarise(y, pred_knn)
-    metrics["knn"]["chosen_k_per_fold"] = chosen_k
-    metrics["knn_invariant"] = summarise(y, pred_inv)
-    metrics["knn_invariant"]["chosen_k_per_fold"] = chosen_k_inv
-    cms = [confusion_matrix(y, p_, labels=CLASSES) for p_ in (pred_base, pred_knn, pred_inv)]
-    metrics["confusion_baseline"], metrics["confusion_knn"], metrics["confusion_knn_invariant"] = \
-        [c.tolist() for c in cms]
-    fig_confusion(cms, ["Baseline: colour threshold", "kNN (all 10 features)", "kNN (lighting-invariant)"],
-                  figs / "confusion_matrices.png")
-    fig_k_selection(k_curves, figs / "k_selection.png")
+    preds, comparison = {}, {}
+    for name in MODELS:
+        print(f"  cross-validating {MODEL_LABELS[name]} ...")
+        preds[name], params, timing = model_cv(name, X, y, groups, INV_COLS)
+        comparison[name] = {**evaluate(name, y, preds[name]), "chosen_params_per_fold": params, **timing}
+    metrics["models"] = comparison
+    final_stage = to_stage(preds[FINAL])
 
-    # Consumer-level view: is the fruit "ready to eat" (stage 3-4) or not?
-    ready_true = np.isin(y, [3, 4])
-    metrics["ready_to_eat_accuracy"] = {
-        name: float(np.mean(np.isin(p_, [3, 4]) == ready_true))
-        for name, p_ in (("baseline", pred_base), ("knn", pred_knn), ("knn_invariant", pred_inv))
-    }
-    def _row(key):
-        m = metrics[key]
-        return [m["accuracy"], m["macro_f1"], m["within_one_accuracy"], metrics["ready_to_eat_accuracy"][key]]
-    fig_bars(["Accuracy", "Macro F1", "Within ±1 stage", "Ready-to-eat\n(yes/no)"],
-             [("Baseline", _row("baseline"), C_ORANGE), ("kNN all features", _row("knn"), C_BLUE),
-              ("kNN lighting-invariant", _row("knn_invariant"), C_AQUA)],
-             "Score (grouped 5-fold CV)", "Classifier comparison on unseen avocados", figs / "baseline_vs_knn.png")
+    # Feature-set comparison for the final model (all 10 features vs lighting-invariant 7)
+    pred_lin_all, _, _ = model_cv(FINAL, X, y, groups, list(range(X.shape[1])))
+    metrics["linear_all_features"] = evaluate(FINAL, y, pred_lin_all)
 
-    # 4. Per-scan latency (feature extraction + prediction) ------------------
-    k_final = int(pd.Series(chosen_k_inv).mode()[0])
-    final_model = make_knn(k_final).fit(X[:, INV_COLS], y)
+    cms = [confusion_matrix(y, p_, labels=CLASSES) for p_ in (pred_base, final_stage)]
+    metrics["confusion_baseline"], metrics["confusion_final"] = [c.tolist() for c in cms]
+    fig_confusion(cms, ["Baseline: colour threshold", "Final: linear regression"], figs / "confusion_matrices.png")
+    fig_pred_vs_true(y, preds[FINAL], figs / "linear_pred_vs_true.png")
+
+    def _row(m):
+        return [m["accuracy"], m["within_one_accuracy"], m["ready_to_eat_accuracy"], m.get("index_r2", np.nan)]
+    series = [("Baseline", _row(metrics["baseline"]), MODEL_COLOR["baseline"])]
+    series += [(MODEL_LABELS[n].replace(" regression", ""), _row(comparison[n]), MODEL_COLOR[n]) for n in MODELS]
+    fig_bars(["Stage accuracy", "Within ±1 stage", "Ready-to-eat\n(yes/no)", "R² of index"], series,
+             "Score (grouped 5-fold CV)", "Model comparison on unseen avocados", figs / "model_comparison.png",
+             figsize=(8, 3.8), ncol=3)
+
+    # 4. Final model: coefficients, size, per-scan latency --------------------
+    final_model, _ = fit_model(FINAL, X[:, INV_COLS], y)
+    metrics["final_model"] = {"name": FINAL, "features": LIGHTING_INVARIANT_FEATURES,
+                              "coefficients": linear_coefficients(final_model, LIGHTING_INVARIANT_FEATURES)}
+    fig_coefficients(metrics["final_model"]["coefficients"], figs / "linear_coefficients.png")
+    metrics["model_size_values"] = {n: n_stored_values(fit_model(n, X[:, INV_COLS], y, groups)[0]) for n in MODELS}
     sample_files = rows["File Name"].iloc[:50]
     t0 = time.perf_counter()
     for f in sample_files:
         feats = extract_features(load_image(args.image_dir / f"{f}.jpg", 200))
         final_model.predict(feats[None, INV_COLS])
     metrics["per_scan_latency_ms"] = (time.perf_counter() - t0) / len(sample_files) * 1000
-    metrics["final_k"] = k_final
 
     # 5. Robustness to lighting --------------------------------------------
     factors = [0.7, 0.85, 1.0, 1.15, 1.3]
-    robust = {"factor": factors, "baseline_acc": [], "knn_acc": [], "knn_invariant_acc": []}
-    hue_idx = FEATURE_NAMES.index("hue_mean_deg")
+    robust = {"factor": factors, "baseline_acc": [], "linear_all_acc": [], "linear_invariant_acc": [],
+              "linear_invariant_mae": []}
     for fct in factors:
         Xp = X if fct == 1.0 else extract_all(rows, args.image_dir, 200, brightness=fct)[0]
-        pb, pk, pi = np.zeros_like(y), np.zeros_like(y), np.zeros_like(y)
-        for (tr, te), k, ki in zip(GroupKFold(5).split(X, y, groups), chosen_k, chosen_k_inv):
-            base = ThresholdClassifier().fit(hue_ripeness_score(X[tr, hue_idx]), y[tr])
-            pb[te] = base.predict(hue_ripeness_score(Xp[te, hue_idx]))
-            pk[te] = make_knn(k).fit(X[tr], y[tr]).predict(Xp[te])
-            pi[te] = make_knn(ki).fit(X[tr][:, INV_COLS], y[tr]).predict(Xp[te][:, INV_COLS])
-        robust["baseline_acc"].append(accuracy_score(y, pb))
-        robust["knn_acc"].append(accuracy_score(y, pk))
-        robust["knn_invariant_acc"].append(accuracy_score(y, pi))
+        robust["baseline_acc"].append(accuracy_score(y, baseline_cv(X, y, groups, Xtest=Xp)))
+        pa, _, _ = model_cv(FINAL, X, y, groups, list(range(X.shape[1])), Xtest=Xp)
+        pi, _, _ = model_cv(FINAL, X, y, groups, INV_COLS, Xtest=Xp)
+        robust["linear_all_acc"].append(accuracy_score(y, to_stage(pa)))
+        robust["linear_invariant_acc"].append(accuracy_score(y, to_stage(pi)))
+        robust["linear_invariant_mae"].append(mean_absolute_error(y, pi))
     metrics["robustness_brightness"] = robust
     fig_bars([f"×{f}" for f in factors],
-             [("Baseline", robust["baseline_acc"], C_ORANGE), ("kNN all features", robust["knn_acc"], C_BLUE),
-              ("kNN lighting-invariant", robust["knn_invariant_acc"], C_AQUA)], "Accuracy",
-             "Sensitivity to lighting: test images brightened/darkened", figs / "robustness_brightness.png")
+             [("Baseline", robust["baseline_acc"], C_ORANGE),
+              ("Linear regression, all 10 features", robust["linear_all_acc"], C_AQUA),
+              ("Linear regression, lighting-invariant", robust["linear_invariant_acc"], C_BLUE)],
+             "Stage accuracy", "Sensitivity to lighting: test images darkened/brightened",
+             figs / "robustness_brightness.png", ncol=2)
 
     # 6. Resolution / runtime trade-off -------------------------------------
     if not args.skip_resolution:
         res = []
         for size in (25, 50, 100, 200, 400, 800):
             Xs, sec_s = extract_all(rows, args.image_dir, size=size if size != 800 else None)
-            _, pk, _, _, _ = run_cv(Xs, y, groups, cols=INV_COLS)
+            ps, _, _ = model_cv(FINAL, Xs, y, groups, INV_COLS)
             res.append({"size_label": str(size), "ms_per_image": sec_s * 1000,
-                        "knn_macro_f1": f1_score(y, pk, average="macro"),
-                        "knn_accuracy": accuracy_score(y, pk)})
-            print(f"  size {size}: {sec_s*1000:.1f} ms/img, F1 {res[-1]['knn_macro_f1']:.3f}")
+                        "index_mae": mean_absolute_error(y, ps), "stage_accuracy": accuracy_score(y, to_stage(ps))})
+            print(f"  size {size}: {sec_s*1000:.1f} ms/img, MAE {res[-1]['index_mae']:.3f}")
         metrics["resolution_study"] = res
         fig_resolution(res, figs / "resolution_tradeoff.png")
 
@@ -396,18 +456,23 @@ def main(argv=None):
     demo = []
     for c in CLASSES:
         i = int(np.where(y == c)[0][0])
-        stage = int(pred_inv[i])
-        demo.append({"file": rows["File Name"].iloc[i], "true_stage": int(c), "predicted_stage": stage,
-                     "message": kiosk_message(stage, float(proba_inv[i]), kr, t0r)})
+        demo.append({"file": rows["File Name"].iloc[i], "true_stage": int(c),
+                     "predicted_index": float(preds[FINAL][i]),
+                     "message": kiosk_message(float(preds[FINAL][i]), kr, t0r)})
     metrics["kiosk_demo"] = demo
-    metrics["days_until_ready_at_20C"] = {str(s): days_until_ready(s, kr, t0r) for s in (1, 2)}
+    metrics["days_until_ready_at_20C"] = {str(s): days_until_ready(s, kr, t0r) for s in (1.5, 2.0, 2.5)}
 
     with open(out / "metrics.json", "w") as fh:
         json.dump(metrics, fh, indent=2, default=float)
-    for key in ("baseline", "knn", "knn_invariant"):
-        m = metrics[key]
-        print(f"{key:15s} acc {m['accuracy']:.3f}  macroF1 {m['macro_f1']:.3f}  "
-              f"within1 {m['within_one_accuracy']:.3f}  MAE {m['stage_mae']:.3f}")
+
+    print("\nModel comparison (grouped 5-fold CV, lighting-invariant features):")
+    b = metrics["baseline"]
+    print(f"  {'Baseline':28s} stage acc {b['accuracy']:.3f}  within±1 {b['within_one_accuracy']:.3f}  "
+          f"ready {b['ready_to_eat_accuracy']:.3f}")
+    for n in MODELS:
+        m = comparison[n]
+        print(f"  {MODEL_LABELS[n]:28s} stage acc {m['accuracy']:.3f}  within±1 {m['within_one_accuracy']:.3f}  "
+              f"ready {m['ready_to_eat_accuracy']:.3f}  MAE {m['index_mae']:.3f}  R2 {m['index_r2']:.3f}")
     print("Kiosk demo:")
     for d in demo:
         print("  ", d)

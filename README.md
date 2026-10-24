@@ -8,8 +8,9 @@ It combines two computational techniques:
 
 | Part | Technique | What it does |
 |---|---|---|
-| Image classifier | HSV colour feature extraction followed by **k-nearest neighbours (kNN)** | Predicts the ripening stage (1–5) from the photo |
-| Baseline | Single-feature **colour-threshold rule** | Reference method the kNN must beat |
+| Ripeness model | HSV colour feature extraction followed by **linear regression** (least squares) | Predicts a continuous ripening index from the photo, rounded to a stage 1–5 |
+| Alternatives compared | Decision tree regression, support vector regression, a small neural network, kNN | Evidence for choosing the final model |
+| Baseline | Single-feature **colour-threshold rule** | Reference method the models must beat |
 | Ripening model | **Logistic curve fitted by nonlinear least squares** (`scipy.optimize.curve_fit`) | Models ripening index against time for each storage temperature, and converts a predicted stage into "days until ready" |
 
 ---
@@ -18,13 +19,17 @@ It combines two computational techniques:
 
 These results use 629 photos of 42 avocados, evaluated with **grouped 5-fold cross-validation**. Every test avocado was unseen during training.
 
-| Model | Accuracy | Macro F1 | Within ±1 stage | Ready-to-eat yes/no |
+| Model (7 lighting-invariant colour features) | Stage accuracy | Within ±1 stage | Ready-to-eat yes/no | R² of index |
 |---|---|---|---|---|
-| Baseline (hue threshold) | 0.55 | 0.55 | 0.98 | 0.72 |
-| kNN, all 10 features | 0.61 | 0.61 | 0.98 | 0.76 |
-| **kNN, lighting-invariant (final)** | **0.60** | **0.60** | **0.98** | **0.76** |
+| Baseline (hue threshold) | 0.55 | 0.98 | 0.72 | – |
+| **Linear regression (final)** | **0.60** | **0.99** | **0.76** | **0.85** |
+| Decision tree regression | 0.53 | 0.98 | 0.73 | 0.79 |
+| Support vector regression | 0.62 | 0.99 | 0.77 | 0.83 |
+| Neural network regression | 0.58 | 0.99 | 0.77 | 0.83 |
+| kNN classifier | 0.60 | 0.98 | 0.76 | 0.78 |
 
-- **Robustness:** when test photos are made 30 % darker, the all-feature kNN drops to 0.53 accuracy. The lighting-invariant kNN stays at 0.60, so it was selected for the kiosk.
+- **Why linear regression:** every model reached about 60 % stage accuracy, and the differences (1–2 points) are smaller than the sampling uncertainty with 42 avocados. Linear regression had the best R², needs no tuning, stores only 8 numbers, and is the easiest to interpret, so it was selected.
+- **Robustness:** using only lighting-invariant features is as accurate as using all 10 (0.60 vs 0.60), and slightly more robust when test photos are 30 % darker (0.57 vs 0.55).
 - **Speed:** about 5 ms per scan (segmentation, features and prediction) at 200 × 200 px.
 - **Ripening curves** were fitted to all 14,722 labels in the dataset. They reach stage 3 ("ready") on day **5.5 at 20 °C** and on day **13.4 at 10 °C**. The rate constant gives **Q10 ≈ 2.1**, meaning ripening roughly doubles in speed for every 10 °C rise.
 
@@ -43,10 +48,10 @@ avocado-ripeness/
 ├── src/avocado_ripeness/      ← source code (importable package)
 │   ├── features.py            ← fruit segmentation + HSV colour features
 │   ├── baseline.py            ← colour-threshold baseline classifier
-│   ├── classifier.py          ← kNN pipeline, k selection, kiosk message
+│   ├── classifier.py          ← linear regression + alternative models, kiosk message
 │   └── ripening_model.py      ← logistic curve fitting, time-to-ready, Q10
 ├── scripts/run_pipeline.py    ← runs the whole experiment end to end
-├── tests/                     ← pytest unit tests (19 tests)
+├── tests/                     ← pytest unit tests (24 tests)
 ├── docs/                      ← HTML source-code documentation (pdoc)
 ├── data/                      ← dataset metadata + subset lists (see data/README.md)
 └── results/                   ← metrics.json, features CSV, figures, test report
@@ -104,13 +109,13 @@ Then open `docs/index.html` in a browser.
 1. **Segmentation.** The photo is converted RGB → HSV. Pixels that are both bright and unsaturated are treated as the white lightbox background. Everything else is fruit. A morphological opening is applied and the largest connected region is kept.
 2. **Features.** These are computed from the fruit pixels only: the circular mean hue (stored as cos/sin, so that 350° and 10° average to 0° rather than 180°), mean and spread of saturation and brightness, and the fractions of green, purple and very dark pixels.
 3. **Baseline.** The unwrapped mean hue is split into 5 stages by 4 cut-points, which are chosen to maximise training accuracy.
-4. **kNN.** The features are standardised and then classified by distance-weighted kNN. `k` is chosen by an inner grouped cross-validation on the training folds only. The final model uses only the 7 features that do not depend on brightness.
+4. **Models.** The features are standardised, then linear regression predicts a continuous ripening index, which is rounded to the nearest stage. The alternatives (decision tree, SVR, neural network, kNN) have their settings chosen by an inner grouped cross-validation on the training folds only. All models use only the 7 features that do not depend on brightness.
 5. **Validation.** Grouped 5-fold CV splits by **avocado ID**. Consecutive daily photos of the same fruit look almost identical, so a random split would leak information and inflate the scores.
 6. **Ripening model.** `R(t) = 1 + 4 / (1 + exp(-k (t - t0)))` is fitted separately for each storage group by Levenberg–Marquardt least squares. It is compared against the 3-parameter form `R_max / (1 + exp(-k (t - t0)))` and validated on 20 % of avocados that were held out from the fit.
 
 ## Main limitations
 
-- Stages 4 and 5 are often confused. Stage 5 is defined by mould spots and senescence, which mean colour features capture poorly.
+- Stages 4 and 5 are often confused. Stage 5 is defined by mould spots and senescence, which mean colour features capture poorly; linear regression in particular predicts most stage-5 fruit as about 4.4 and rounds them to stage 4.
 - The photos come from a controlled lightbox. A real kiosk would need a similar enclosure, and the lighting test only simulates uniform brightness changes, not colour casts or shadows.
 - The model applies to the Hass variety only, and the classifier was trained on a 629-image subset of the dataset.
 
